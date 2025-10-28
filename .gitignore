@@ -1,0 +1,17 @@
+# Sistema
+.DS_Store
+Thumbs.db
+
+# PHP
+/vendor/
+composer.lock
+
+# Entorno / claves
+.env
+.env.local
+
+# Subidas locales (usar Cloudinary en prod)
+public/uploads/
+
+# Logs
+*.log
