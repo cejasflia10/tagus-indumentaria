@@ -1,5 +1,5 @@
 <?php
-// public/crear_producto.php — Crear producto + múltiples imágenes + variantes + link a etiquetas QR
+// public/crear_producto.php — Crear producto + múltiples imágenes + variantes + genera ETIQUETAS QR (Cloudinary)
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) session_start();
 
@@ -11,17 +11,67 @@ if (!isset($conexion) || !($conexion instanceof mysqli)) { http_response_code(50
 function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
 function n2($v){ return number_format((float)$v, 2, ',', '.'); }
 
-/* Helpers base URL para links */
+/* ===== Helpers de URL/base ===== */
 $scriptDir = rtrim(str_replace('\\','/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
 $BASE = preg_replace('#/public$#', '', $scriptDir); if ($BASE === '') $BASE = '/';
 function base_url_path(string $path): string {
   global $BASE; return rtrim($BASE,'/').'/'.ltrim($path,'/');
 }
+function abs_base_url(): string {
+  $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+  $host   = $_SERVER['HTTP_HOST'] ?? 'localhost';
+  global $BASE;
+  return $scheme.'://'.$host.$BASE;
+}
+
+/* ===== Subida directa de BYTES a Cloudinary ===== */
+function cloud_upload_bytes(string $bytes, string $public_id, string $mime='image/png'): ?string {
+  if (!CLOUD_ENABLED || !extension_loaded('curl')) return null;
+  $tmp = tempnam(sys_get_temp_dir(), 'qr_');
+  file_put_contents($tmp, $bytes);
+  $timestamp = time();
+  $folder = defined('CLOUD_FOLDER') ? CLOUD_FOLDER : 'tagus_indumentaria';
+
+  // Firma correcta (NO incluye api_key)
+  $signParams = ['folder'=>$folder,'public_id'=>$public_id,'timestamp'=>(string)$timestamp];
+  ksort($signParams);
+  $pairs = [];
+  foreach($signParams as $k=>$v){ if($v!=='' && $v!==null) $pairs[] = $k.'='.$v; }
+  $signature = sha1(implode('&',$pairs) . CLOUD_API_SECRET);
+
+  $post = [
+    'file'       => new CURLFile($tmp, $mime, basename($public_id).'.png'),
+    'timestamp'  => $timestamp,
+    'public_id'  => $public_id,
+    'folder'     => $folder,
+    'api_key'    => CLOUD_API_KEY,
+    'signature'  => $signature,
+  ];
+  $ch = curl_init('https://api.cloudinary.com/v1_1/'.CLOUD_NAME.'/image/upload');
+  curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER=>true, CURLOPT_POST=>true, CURLOPT_POSTFIELDS=>$post]);
+  $resp = curl_exec($ch); $http = curl_getinfo($ch, CURLINFO_HTTP_CODE); curl_close($ch);
+  @unlink($tmp);
+  if ($resp===false || $http>=400) return null;
+  $j = json_decode($resp, true);
+  return $j['secure_url'] ?? ($j['url'] ?? null);
+}
+
+/* ===== Descarga segura de una URL (PNG esperado) ===== */
+function fetch_bytes(string $url, int $timeout=20): ?string {
+  // preferimos file_get_contents con contexto y timeout
+  $ctx = stream_context_create(['http'=>['timeout'=>$timeout,'ignore_errors'=>true]]);
+  $b = @file_get_contents($url, false, $ctx);
+  return $b!==false ? $b : null;
+}
+/* ¿Es PNG? (firma 89 50 4E 47 0D 0A 1A 0A) */
+function looks_like_png(string $bytes): bool {
+  return substr($bytes,0,8) === "\x89\x50\x4E\x47\x0D\x0A\x1A\x0A";
+}
 
 $msg=null; $ok=false; $pid=null;
 
+/* ====== Alta ====== */
 if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['step'] ?? '') === 'create') {
-  // ===== Campos producto =====
   $titulo = trim($_POST['titulo'] ?? '');
   $precio = (float)($_POST['precio'] ?? 0);
   $desc   = trim($_POST['descripcion'] ?? '');
@@ -30,37 +80,38 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['step'] ?? '') === 'create') 
   if ($titulo==='' || $precio<=0) {
     $msg = 'Completá título y precio.';
   } else {
-    // Crear producto
     $st = $conexion->prepare("INSERT INTO ind_productos (titulo, descripcion, precio, categoria, activo) VALUES (?,?,?,?,1)");
     if(!$st){ $msg = 'Error interno preparando alta de producto.'; }
     else{
       $st->bind_param('ssds', $titulo, $desc, $precio, $cat);
       if ($st->execute()) {
-        $pid = $st->insert_id;
+        $pid = (int)$st->insert_id;
         $ok  = true;
 
-        // ===== Variantes (talles/colores/medidas/stock)
+        /* ===== Variantes ===== */
         $talles   = $_POST['talle']    ?? [];
         $colores  = $_POST['color']    ?? [];
         $medidas  = $_POST['medidas']  ?? [];
         $stocks   = $_POST['stock']    ?? [];
+        $varIds   = [];
 
         if (is_array($talles) && is_array($colores) && is_array($medidas) && is_array($stocks)) {
           $insVar = $conexion->prepare("INSERT INTO ind_variantes (producto_id, talle, color, medidas, stock) VALUES (?,?,?,?,?)");
           if ($insVar) {
-            for ($i=0; $i < max(count($talles), count($colores), count($medidas), count($stocks)); $i++) {
-              $vtalle   = trim((string)($talles[$i]  ?? ''));
-              $vcolor   = trim((string)($colores[$i] ?? ''));
-              $vmed     = trim((string)($medidas[$i] ?? ''));
-              $vstock   = (int)($stocks[$i] ?? 0);
+            $n = max(count($talles), count($colores), count($medidas), count($stocks));
+            for ($i=0; $i<$n; $i++) {
+              $vtalle = trim((string)($talles[$i]  ?? ''));
+              $vcolor = trim((string)($colores[$i] ?? ''));
+              $vmed   = trim((string)($medidas[$i] ?? ''));
+              $vstock = (int)($stocks[$i] ?? 0);
               if ($vtalle==='' && $vcolor==='' && $vmed==='' && $vstock===0) continue;
               $insVar->bind_param('isssi', $pid, $vtalle, $vcolor, $vmed, $vstock);
-              $insVar->execute();
+              if ($insVar->execute()) { $varIds[] = (int)$insVar->insert_id; }
             }
           }
         }
 
-        // ===== Imágenes múltiples (Cloudinary firmado simple)
+        /* ===== Imágenes del producto (Cloudinary) ===== */
         if (!empty($_FILES['fotos']['name'][0]) && CLOUD_ENABLED) {
           $subidas = 0;
           foreach ($_FILES['fotos']['name'] as $i=>$name) {
@@ -69,15 +120,12 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['step'] ?? '') === 'create') 
 
             $cloudUrl = 'https://api.cloudinary.com/v1_1/'.rawurlencode(CLOUD_NAME).'/image/upload';
             $timestamp = time();
-            $params = ['api_key'=>CLOUD_API_KEY,'timestamp'=>$timestamp,'folder'=>CLOUD_FOLDER];
+            $params = ['timestamp'=>$timestamp,'folder'=>CLOUD_FOLDER,'public_id'=>'prod_'.$pid.'_img_'.($i+1)];
             ksort($params);
-            $toSign = '';
-            foreach ($params as $k=>$v) { if ($v!=='' && $v!==null) $toSign .= $k.'='.$v.'&'; }
-            $toSign = rtrim($toSign,'&');
-            $signature = sha1($toSign . CLOUD_API_SECRET);
+            $pairs=[]; foreach($params as $k=>$v){ if($v!=='' && $v!==null) $pairs[]=$k.'='.$v; }
+            $signature = sha1(implode('&',$pairs) . CLOUD_API_SECRET);
 
-            $postFields = $params;
-            $postFields['signature'] = $signature;
+            $postFields = $params + ['api_key'=>CLOUD_API_KEY,'signature'=>$signature];
             $postFields['file'] = new CURLFile($tmpPath, mime_content_type($tmpPath), $name);
 
             $ch = curl_init($cloudUrl);
@@ -99,6 +147,42 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['step'] ?? '') === 'create') 
           }
         }
 
+        /* ===== Generar y subir ETIQUETAS QR (una por variante) ===== */
+        if (!empty($varIds) && CLOUD_ENABLED) {
+          $absBase = rtrim(abs_base_url(),'/');
+          foreach ($varIds as $vid) {
+            // 1) Intentar etiqueta PNG completa (QR + datos)
+            $etqUrl = $absBase.'/app/pages/etiqueta_var.php?pid='.$pid.'&vid='.$vid;
+            $png = fetch_bytes($etqUrl);
+            $uploaded = false;
+
+            if (is_string($png) && looks_like_png($png)) {
+              $pubId = 'etiquetas/prod_'.$pid.'_var_'.$vid;
+              $u = cloud_upload_bytes($png, $pubId, 'image/png');
+              if ($u) {
+                $stI = $conexion->prepare("INSERT INTO ind_imagenes (producto_id, url, is_primary) VALUES (?,?,0)");
+                if ($stI){ $stI->bind_param('is',$pid,$u); $stI->execute(); }
+                $uploaded = true;
+              }
+            }
+
+            // 2) Fallback: al menos subir QR puro (Google Charts)
+            if (!$uploaded) {
+              $sellUrl = $absBase.'/app/pages/venta_qr.php?pid='.$pid.'&vid='.$vid.'&sell=1';
+              $qrUrl = 'https://chart.googleapis.com/chart?cht=qr&chs=520x520&chld=L|1&chl='.rawurlencode($sellUrl);
+              $qrPng = fetch_bytes($qrUrl);
+              if (is_string($qrPng) && looks_like_png($qrPng)) {
+                $pubId = 'etiquetas/qr_puro_prod_'.$pid.'_var_'.$vid;
+                $u = cloud_upload_bytes($qrPng, $pubId, 'image/png');
+                if ($u) {
+                  $stI = $conexion->prepare("INSERT INTO ind_imagenes (producto_id, url, is_primary) VALUES (?,?,0)");
+                  if ($stI){ $stI->bind_param('is',$pid,$u); $stI->execute(); }
+                }
+              }
+            }
+          }
+        }
+
       } else {
         $msg = 'No se pudo crear el producto.';
       }
@@ -106,7 +190,7 @@ if ($_SERVER['REQUEST_METHOD']==='POST' && ($_POST['step'] ?? '') === 'create') 
   }
 }
 
-/* Variantes recién creadas (para mostrar botones de etiqueta) */
+/* Variantes recién creadas (para botones/links rápidos) */
 $vars = [];
 if ($ok && $pid) {
   $rv = $conexion->query("SELECT id, talle, color, medidas, stock FROM ind_variantes WHERE producto_id={$pid} ORDER BY color, talle, id");
@@ -144,18 +228,15 @@ if ($ok && $pid) {
             <div class="card" style="margin-top:10px">
               <div class="card-header">Etiquetas QR por variante</div>
               <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap">
-                <?php foreach ($vars as $v): 
+                <?php foreach ($vars as $v):
                   $vid   = (int)$v['id'];
-                  $label = trim(($v['talle']??'').' / '.($v['color']??''));
-                  if ($label === '/' || $label === ' / ') $label = 'Única';
-                  $etq   = base_url_path('public/etiqueta_var.php').'?pid='.$pid.'&vid='.$vid;
+                  $label = trim(($v['talle']??'').' / '.($v['color']??'')); if ($label===' / ' || $label==='/') $label='Única';
+                  $etq   = base_url_path('app/pages/etiqueta_var.php').'?pid='.$pid.'&vid='.$vid;
                 ?>
-                  <a class="btn btn-primary" href="<?= h($etq) ?>" target="_blank" title="Abrir etiqueta para imprimir">
-                    🧾 Etiqueta: <?= h($label) ?>
-                  </a>
+                  <a class="btn btn-primary" href="<?= h($etq) ?>" target="_blank">🧾 Etiqueta: <?= h($label) ?></a>
                 <?php endforeach; ?>
               </div>
-              <div class="card-footer tiny">La etiqueta es una imagen PNG con QR (vende 1 y descuenta stock). Podés imprimir y pegar en la prenda.</div>
+              <div class="card-footer tiny">Se subió automáticamente una imagen de etiqueta/QR por variante a Cloudinary (aparece en “Gestionar imágenes”).</div>
             </div>
           <?php endif; ?>
         </div></div>
@@ -187,14 +268,12 @@ if ($ok && $pid) {
         <div style="grid-column:1/-1;margin-top:14px">
           <label style="display:block;margin-bottom:6px">Variantes (talle/color/medidas/stock)</label>
           <div class="variants-grid" id="varsGrid">
-            <!-- Cabecera -->
             <div><label>Talle</label></div>
             <div><label>Color</label></div>
             <div><label>Medidas</label></div>
             <div><label>Stock</label></div>
             <div></div>
 
-            <!-- Fila inicial -->
             <div class="variants-row">
               <div><input class="input" type="text" name="talle[]" placeholder="M, L, XL..."></div>
               <div><input class="input" type="text" name="color[]" placeholder="negro, rojo..."></div>
@@ -238,10 +317,7 @@ function rmVarRow(btn){
   if (!row) return;
   const grid = document.getElementById('varsGrid');
   const rows = grid.querySelectorAll('.variants-row');
-  if (rows.length <= 1){
-    row.querySelectorAll('input').forEach(i=>i.value='');
-    return;
-  }
+  if (rows.length <= 1){ row.querySelectorAll('input').forEach(i=>i.value=''); return; }
   row.remove();
 }
 </script>

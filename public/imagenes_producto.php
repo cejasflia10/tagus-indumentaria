@@ -1,14 +1,11 @@
 <?php
-// public/imagenes_producto.php — Admin: subir múltiples fotos (Cloudinary), marcar portada, eliminar (corregido)
-// - Firma Cloudinary correcta (NO incluye api_key en la signature)
-// - Validaciones de cURL / extensiones
-// - Mensajes de error más claros
-// - Sin redeclarar h(): ya viene desde app/config.php
+// public/imagenes_producto.php — Admin: subir múltiples fotos (Cloudinary), marcar portada, eliminar
+// - Acciones y redirecciones ANTES de cualquier salida (fix headers already sent)
+
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) session_start();
 
 require_once __DIR__ . '/../app/config.php';
-require_once __DIR__ . '/partials/menu.php'; // menú admin (no público)
 if (!isset($conexion) || !($conexion instanceof mysqli)) { http_response_code(500); exit('❌ Sin BD'); }
 @$conexion->set_charset('utf8mb4');
 
@@ -20,7 +17,9 @@ $rp = $conexion->query("SELECT id, titulo FROM ind_productos WHERE id={$pid} LIM
 if (!$rp || !$rp->num_rows) { http_response_code(404); exit('Producto no encontrado'); }
 $prod = $rp->fetch_assoc();
 
-// Acciones: marcar portada
+/* ========= ACCIONES (todas antes de imprimir HTML) ========= */
+
+// Marcar portada
 if (($_POST['action'] ?? '') === 'cover') {
   $iid = (int)($_POST['id'] ?? 0);
   $conexion->begin_transaction();
@@ -33,16 +32,18 @@ if (($_POST['action'] ?? '') === 'cover') {
   } catch (Throwable $e) {
     $conexion->rollback();
   }
-  header('Location: imagenes_producto.php?pid='.$pid); exit;
+  header('Location: imagenes_producto.php?pid='.$pid);
+  exit;
 }
 
-// Acciones: eliminar imagen (solo BD; si querés, después sumamos delete en Cloudinary con public_id)
+// Eliminar imagen
 if (($_POST['action'] ?? '') === 'del') {
   $iid = (int)($_POST['id'] ?? 0);
   $st = $conexion->prepare("DELETE FROM ind_imagenes WHERE id=? AND producto_id=?");
   $st->bind_param('ii', $iid, $pid);
   $st->execute();
-  header('Location: imagenes_producto.php?pid='.$pid); exit;
+  header('Location: imagenes_producto.php?pid='.$pid);
+  exit;
 }
 
 // Subida múltiple a Cloudinary
@@ -53,37 +54,29 @@ if (($_POST['action'] ?? '') === 'upload' && !empty($_FILES['fotos']['name'][0])
   } elseif (!extension_loaded('curl')) {
     $err = 'PHP sin extensión cURL. Activala en php.ini (extension=curl) y reiniciá Apache.';
   } else {
-    // Si el producto no tiene portada, la primera subida será portada
+    // ¿ya hay portada?
     $hasCover = false;
     $q = $conexion->query("SELECT COUNT(*) c FROM ind_imagenes WHERE producto_id={$pid} AND is_primary=1");
     if ($q && $q->num_rows) $hasCover = ((int)$q->fetch_assoc()['c'] > 0);
 
     $subidas = 0;
-
     foreach ($_FILES['fotos']['name'] as $i => $name) {
-      // Validaciones básicas
-      if (!isset($_FILES['fotos']['error'][$i]) || $_FILES['fotos']['error'][$i] !== UPLOAD_ERR_OK) continue;
+      if (($_FILES['fotos']['error'][$i] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) continue;
       if (!is_uploaded_file($_FILES['fotos']['tmp_name'][$i])) continue;
 
       $tmpPath = $_FILES['fotos']['tmp_name'][$i];
-      $mime = function_exists('mime_content_type') ? mime_content_type($tmpPath) : 'application/octet-stream';
+      $mime    = function_exists('mime_content_type') ? mime_content_type($tmpPath) : 'application/octet-stream';
 
-      // Cloudinary Upload API (firma correcta: NO incluir api_key en la signature)
       $cloudUrl  = 'https://api.cloudinary.com/v1_1/'.rawurlencode(CLOUD_NAME).'/image/upload';
       $timestamp = time();
 
-      // Solo parámetros que van en la signature (ordenados por key asc):
-      // Cloudinary firma: sha1("folder=...&timestamp=...<+otros params firmables>"+API_SECRET)
-      $signParams = [
-        'folder'    => CLOUD_FOLDER,
-        'timestamp' => (string)$timestamp,
-      ];
+      // Firma correcta (NO incluye api_key)
+      $signParams = ['folder' => CLOUD_FOLDER, 'timestamp' => (string)$timestamp];
       ksort($signParams);
-      $toSign = [];
-      foreach ($signParams as $k => $v) { if ($v !== '' && $v !== null) $toSign[] = $k.'='.$v; }
-      $signature = sha1(implode('&', $toSign) . CLOUD_API_SECRET);
+      $pairs = [];
+      foreach ($signParams as $k=>$v) { if ($v !== '' && $v !== null) $pairs[] = $k.'='.$v; }
+      $signature = sha1(implode('&', $pairs) . CLOUD_API_SECRET);
 
-      // Campos POST (incluye api_key, pero api_key NO entra en la firma)
       $postFields = [
         'file'      => new CURLFile($tmpPath, $mime, $name),
         'api_key'   => CLOUD_API_KEY,
@@ -99,27 +92,15 @@ if (($_POST['action'] ?? '') === 'upload' && !empty($_FILES['fotos']['name'][0])
         CURLOPT_POSTFIELDS     => $postFields,
       ]);
       $resp = curl_exec($ch);
-      if ($resp === false) {
-        $err = 'Error cURL al subir a Cloudinary: '.curl_error($ch);
-        curl_close($ch);
-        break;
-      }
+      if ($resp === false) { $err = 'Error cURL al subir a Cloudinary: '.curl_error($ch); curl_close($ch); break; }
       $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
       curl_close($ch);
-
-      if ($http >= 400) {
-        $err = 'Cloudinary respondió HTTP '.$http.'.';
-        break;
-      }
+      if ($http >= 400) { $err = 'Cloudinary respondió HTTP '.$http.'.'; break; }
 
       $j = json_decode($resp, true);
       $url = $j['secure_url'] ?? ($j['url'] ?? '');
-      if (!$url) {
-        $err = 'No se obtuvo URL de la imagen subida.';
-        break;
-      }
+      if (!$url) { $err = 'No se obtuvo URL de la imagen subida.'; break; }
 
-      // Insertar en BD; si no hay portada, la primera subida la marca
       $is_primary = ($hasCover ? 0 : ($subidas === 0 ? 1 : 0));
       $st = $conexion->prepare("INSERT INTO ind_imagenes (producto_id, url, is_primary) VALUES (?,?,?)");
       $st->bind_param('isi', $pid, $url, $is_primary);
@@ -127,9 +108,15 @@ if (($_POST['action'] ?? '') === 'upload' && !empty($_FILES['fotos']['name'][0])
       $subidas++;
     }
 
-    if (!$err) { header('Location: imagenes_producto.php?pid='.$pid); exit; }
+    if (!$err) {
+      header('Location: imagenes_producto.php?pid='.$pid);
+      exit;
+    }
   }
 }
+
+/* ========= A PARTIR DE ACÁ, YA PODEMOS IMPRIMIR HTML ========= */
+require_once __DIR__ . '/partials/menu.php'; // ahora sí, después de acciones
 
 // Listar imágenes
 $imgs = $conexion->query("SELECT id, url, is_primary FROM ind_imagenes WHERE producto_id={$pid} ORDER BY is_primary DESC, id DESC");
