@@ -1,9 +1,11 @@
-Options -Multiviews
 RewriteEngine On
-# Forzar HTTPS si Render proxy pasa X-Forwarded-Proto
-RewriteCond %{HTTP:X-Forwarded-Proto} =http
-RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
-# Router PHP
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
+# Ajustá la base si tu carpeta no se llama TAGUS
+RewriteBase /TAGUS/public/
+
+# No tocar archivos reales
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Todo lo demás → index.php
 RewriteRule ^ index.php [QSA,L]

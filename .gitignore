@@ -9,6 +9,7 @@ composer.lock
 # Entorno / claves
 .env
 .env.local
+app/config.local.php
 
 # Subidas locales (usar Cloudinary en prod)
 public/uploads/
