@@ -1,24 +1,32 @@
-# PHP 8.2 CLI
-FROM php:8.2-cli
+# Dockerfile — PHP 8.2 + Apache (index.php en la raíz)
 
-# Paquetes necesarios para compilar/extensiones
+FROM php:8.2-apache
+
+# Extensiones y mods necesarios
 RUN apt-get update && apt-get install -y \
-    libcurl4-openssl-dev \
-    libzip-dev \
-    libpng-dev libjpeg-dev libfreetype6-dev \
-    unzip \
- && docker-php-ext-install mysqli pdo pdo_mysql curl \
- && docker-php-ext-enable mysqli pdo_mysql curl \
- && rm -rf /var/lib/apt/lists/*
+      libpng-dev libjpeg-dev libfreetype6-dev libzip-dev unzip \
+      libcurl4-openssl-dev \
+  && docker-php-ext-configure gd --with-freetype --with-jpeg \
+  && docker-php-ext-install mysqli pdo pdo_mysql gd zip curl \
+  && a2enmod rewrite headers expires \
+  && rm -rf /var/lib/apt/lists/*
 
-# Carpeta de trabajo
-WORKDIR /app
+# Copiar el proyecto a la raíz de Apache
+WORKDIR /var/www/html
+COPY . /var/www/html
 
-# Copiar el proyecto
-COPY . /app
+# Permisos (opcional)
+RUN chown -R www-data:www-data /var/www/html
 
-# Puerto por defecto local (Render usa $PORT)
+# Configurar VirtualHost para RAÍZ y permitir .htaccess
+RUN sed -ri 's#DocumentRoot /var/www/html#DocumentRoot /var/www/html#g' /etc/apache2/sites-available/000-default.conf \
+ && awk '1; /DocumentRoot/ {print "    <Directory /var/www/html>\n        Options Indexes FollowSymLinks\n        AllowOverride All\n        Require all granted\n    </Directory>"}' /etc/apache2/sites-available/000-default.conf > /tmp/vh && mv /tmp/vh /etc/apache2/sites-available/000-default.conf
+
+# Hacer que Apache escuche en $PORT (útil para Render)
+ENV APACHE_LISTEN_PORT=10000
+RUN sed -ri "s/Listen 80/Listen \${APACHE_LISTEN_PORT}/" /etc/apache2/ports.conf \
+ && sed -ri "s#<VirtualHost \*:80>#<VirtualHost *:\${APACHE_LISTEN_PORT}>#" /etc/apache2/sites-available/000-default.conf
+
 EXPOSE 10000
 
-# Iniciar servidor PHP embebido sirviendo /public y escuchando en $PORT
-CMD ["sh", "-lc", "php -S 0.0.0.0:${PORT:-10000} -t public"]
+CMD ["apache2-foreground"]

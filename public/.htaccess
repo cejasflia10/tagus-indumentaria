@@ -1,11 +1,7 @@
-RewriteEngine On
-# Ajustá la base si tu carpeta no se llama TAGUS
-RewriteBase /TAGUS/public/
-
-# No tocar archivos reales
-RewriteCond %{REQUEST_FILENAME} -f [OR]
-RewriteCond %{REQUEST_FILENAME} -d
-RewriteRule ^ - [L]
-
-# Todo lo demás → index.php
-RewriteRule ^ index.php [QSA,L]
+# /.htaccess
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ index.php [L]
+</IfModule>
