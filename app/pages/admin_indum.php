@@ -1,42 +1,40 @@
 <?php
 /* ============================================================
    app/pages/admin_indum.php — Admin indumentaria + Cloudinary
-   • Crear producto (con múltiples imágenes a Cloudinary)
-   • Listar productos (con thumbs, QRs por variante)
-   • Editar producto (título, precio, categoría, descripción, activo)
-   • Gestionar variantes: agregar / actualizar / eliminar
-   • Ajuste rápido de stock ±1
-   • Eliminar producto (borra variantes e imágenes por FK)
-   • Link directo a gestor de imágenes (public/imagenes_producto.php)
+   (usa SOLO el menú de /public/partials/menu.php, sin view())
    ============================================================ */
 declare(strict_types=1);
+
+ini_set('display_errors','1'); ini_set('display_startup_errors','1'); error_reporting(E_ALL);
 
 require_once dirname(__DIR__) . '/config.php';
 require_once dirname(__DIR__) . '/helpers.php';
 
-// ⚠️ Si tu menú admin vive en /public/partials/menu.php, usá esta ruta:
+/* ⬇️ Menú (este archivo ya incluye <head>/<body> y style.css) */
 require_once dirname(__DIR__, 2) . '/public/partials/menu.php';
-// Si en tu proyecto el menú está en otro lado, ajustá la ruta de arriba.
 
-if (!isset($conexion) || !($conexion instanceof mysqli) || $conexion->connect_errno) {
-  http_response_code(500);
-  exit('❌ Sin conexión a BD. Revisá app/config.php');
+/* ===== Helpers mínimos (por si no existen en helpers.php) ===== */
+if (!function_exists('h')) {
+  function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
 }
-
-$title = 'Administrar tienda';
-view('partials/header.php');
-
-/* ===== Helpers ===== */
-function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
+if (!function_exists('url')) {
+  function url(string $path=''): string {
+    $scriptDir = rtrim(str_replace('\\','/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+    $base = preg_replace('#/(public|app)(/.*)?$#','',$scriptDir);
+    $base = $base === '/' ? '' : $base;
+    return rtrim($base,'/') . '/' . ltrim($path,'/');
+  }
+}
 function n2($v){ return number_format((float)$v, 2, ',', '.'); }
-
-/* Google Charts QR helper */
 function qr_url(string $data, int $size=320): string {
   $chl = rawurlencode($data);
   return "https://chart.googleapis.com/chart?cht=qr&chs={$size}x{$size}&chld=L|0&chl={$chl}";
 }
 
-/* Cloudinary upload via cURL (archivo local -> URL) */
+/* ===== Estado BD (no cortar render) ===== */
+$db_ok = (isset($conexion) && ($conexion instanceof mysqli) && !$conexion->connect_errno);
+
+/* ===== Cloudinary: subir archivo local -> URL ===== */
 function cloud_upload_localfile(string $filepath, string $public_id): ?string {
   if (!defined('CLOUD_ENABLED') || !CLOUD_ENABLED) return null;
   if (!is_file($filepath)) return null;
@@ -45,7 +43,6 @@ function cloud_upload_localfile(string $filepath, string $public_id): ?string {
   $timestamp = time();
   $folder = defined('CLOUD_FOLDER') ? CLOUD_FOLDER : 'tagus_indumentaria';
 
-  // Firmar
   $params = ['timestamp'=>$timestamp,'public_id'=>$public_id,'folder'=>$folder];
   ksort($params);
   $to_sign = '';
@@ -69,12 +66,11 @@ function cloud_upload_localfile(string $filepath, string $public_id): ?string {
   return $json['secure_url'] ?? ($json['url'] ?? null);
 }
 
-/* ===== Acciones ===== */
+/* ===== Acciones (solo si hay BD) ===== */
 $alert = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($db_ok && $_SERVER['REQUEST_METHOD'] === 'POST') {
   $action = $_POST['action'] ?? '';
 
-  /* Crear producto */
   if ($action === 'crear') {
     $titulo = trim((string)($_POST['titulo'] ?? ''));
     $desc   = trim((string)($_POST['descripcion'] ?? ''));
@@ -91,7 +87,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
       $ok = $st->execute(); $pid = $ok ? (int)$st->insert_id : 0; $st->close();
 
       if ($ok && $pid > 0) {
-        // Subir imágenes
         $urls = [];
         if (!empty($_FILES['imgs']) && is_array($_FILES['imgs']['name'])) {
           foreach (array_keys($_FILES['imgs']['name']) as $i) {
@@ -109,13 +104,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           $si = $conexion->prepare("INSERT INTO ind_imagenes (producto_id, url, is_primary) VALUES (?,?,?)");
           $si->bind_param('isi', $pid, $u, $is_p); $si->execute(); $si->close();
         }
-        // Asegurar una portada
         $r = $conexion->query("SELECT COUNT(*) c FROM ind_imagenes WHERE producto_id={$pid} AND is_primary=1");
         if ($r && ($row=$r->fetch_assoc()) && (int)$row['c']===0) {
           $conexion->query("UPDATE ind_imagenes SET is_primary=1 WHERE producto_id={$pid} ORDER BY id ASC LIMIT 1");
         }
 
-        // Variantes
         $talles = $_POST['talle'] ?? [];
         $colores= $_POST['color'] ?? [];
         $meds   = $_POST['medidas'] ?? [];
@@ -132,7 +125,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $sv->execute(); $sv->close();
           }
         }
-
         $alert = '✅ Producto creado, fotos a Cloudinary y variantes guardadas.';
       } else {
         $alert = '❌ No se pudo crear el producto.';
@@ -140,7 +132,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
   }
 
-  /* Editar producto (guardar cambios) */
   if ($action === 'upd_product') {
     $pid     = (int)($_POST['producto_id'] ?? 0);
     $titulo  = trim((string)($_POST['titulo'] ?? ''));
@@ -156,7 +147,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
   }
 
-  /* Agregar variante a un producto ya existente */
   if ($action === 'add_variant') {
     $pid   = (int)($_POST['producto_id'] ?? 0);
     $talle = trim((string)($_POST['talle'] ?? ''));
@@ -171,7 +161,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
   }
 
-  /* Actualizar variante (talle/color/medidas/stock) */
   if ($action === 'upd_variant') {
     $vid   = (int)($_POST['variante_id'] ?? 0);
     $pid   = (int)($_POST['producto_id'] ?? 0);
@@ -187,7 +176,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
   }
 
-  /* Eliminar variante */
   if ($action === 'del_variant') {
     $vid = (int)($_POST['variante_id'] ?? 0);
     $pid = (int)($_POST['producto_id'] ?? 0);
@@ -199,7 +187,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
   }
 
-  /* Ajuste rápido de stock */
   if ($action === 'stock_plus' || $action === 'stock_minus') {
     $var_id = (int)($_POST['variante_id'] ?? 0);
     $delta  = ($action === 'stock_plus') ? +1 : -1;
@@ -207,7 +194,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $alert = '✅ Stock actualizado.';
   }
 
-  /* Eliminar producto completo */
   if ($action === 'eliminar_producto') {
     $pid = (int)($_POST['producto_id'] ?? 0);
     if ($pid>0) {
@@ -227,28 +213,40 @@ function vars_de(mysqli $db, int $pid): array {
   return $r ? $r->fetch_all(MYSQLI_ASSOC) : [];
 }
 $productos = [];
-$qr = $conexion->query("SELECT id, titulo, descripcion, precio, categoria, activo FROM ind_productos ORDER BY id DESC");
-if ($qr) { $productos = $qr->fetch_all(MYSQLI_ASSOC); }
+if ($db_ok) {
+  $qr = $conexion->query("SELECT id, titulo, descripcion, precio, categoria, activo FROM ind_productos ORDER BY id DESC");
+  if ($qr) { $productos = $qr->fetch_all(MYSQLI_ASSOC); }
+}
 
-/* ===== Estilos mínimos (oscuro/compacto) ===== */
+/* ===== Estilos locales claros para esta vista ===== */
 ?>
 <style>
-.admin .panel{border:1px solid var(--border);border-radius:14px;padding:1rem;background:#0d1117}
+.admin { color:#111; background:#fff; padding:16px; }
+.admin .panel{border:1px solid #ddd;border-radius:14px;padding:1rem;background:#fafafa;color:#111}
 .admin .grid{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
 .admin .thumbs{display:flex;gap:.5rem;flex-wrap:wrap}
-.admin .thumbs img{width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid var(--border);background:#0b0f14}
-.admin .muted{color:var(--muted)}
+.admin .thumbs img{width:72px;height:72px;object-fit:cover;border-radius:8px;border:1px solid #ccc;background:#fff}
+.admin .muted{color:#555}
 .admin .row{display:flex;gap:.5rem;flex-wrap:wrap}
-.admin .input,.admin .select,.admin textarea{padding:.6rem .8rem;border-radius:10px;border:1px solid var(--border);background:#0c0f15;color:var(--text)}
+.admin .input,.admin .select,.admin textarea{padding:.6rem .8rem;border-radius:10px;border:1px solid #ccc;background:#fff;color:#111}
 .admin label{display:block;margin:.4rem 0 .2rem}
-.admin .hr{height:1px;background:var(--border);margin:1rem 0}
-.admin .pill{display:inline-block;font-size:.75rem;padding:.15rem .5rem;border-radius:999px;background:#111827;color:#c7d2fe;border:1px solid #374151}
-.admin details{border:1px dashed var(--border);border-radius:10px;padding:.5rem;background:#0c1016}
+.admin .hr{height:1px;background:#ddd;margin:1rem 0}
+.admin .pill{display:inline-block;font-size:.75rem;padding:.15rem .5rem;border-radius:999px;background:#eef2ff;color:#111;border:1px solid #c7d2fe}
+.admin details{border:1px dashed #ccc;border-radius:10px;padding:.5rem;background:#fff}
 .admin summary{cursor:pointer;font-weight:700}
 </style>
 
-<div class="admin">
+<main class="container admin">
   <h1 style="margin:.5rem 0 1rem 0">Administrar tienda</h1>
+
+  <?php if (!$db_ok): ?>
+    <div class="panel" style="border-left:4px solid #ef4444">
+      ❌ No hay conexión a la base. Revisá <code>app/config.php</code>.<br>
+      <small class="muted">
+        Detalle: <?= isset($conexion) && ($conexion instanceof mysqli) ? h($conexion->connect_errno.' — '.$conexion->connect_error) : 'variable $conexion no inicializada'; ?>
+      </small>
+    </div>
+  <?php endif; ?>
 
   <?php if ($alert): ?>
     <div class="panel" style="border-left:4px solid #22d3ee"><?= h($alert) ?></div>
@@ -257,43 +255,41 @@ if ($qr) { $productos = $qr->fetch_all(MYSQLI_ASSOC); }
   <!-- Crear -->
   <div class="panel">
     <h2 style="margin:0 0 .75rem 0">Nuevo producto</h2>
-
-    <form method="post" enctype="multipart/form-data" class="stack">
+    <form method="post" enctype="multipart/form-data" class="stack" <?= $db_ok ? '' : 'onsubmit="return false;"' ?>>
       <input type="hidden" name="action" value="crear">
-
       <div class="row">
         <div style="flex:1;min-width:260px">
           <label>Título *</label>
-          <input class="input" name="titulo" required>
+          <input class="input" name="titulo" required <?= $db_ok?'':'disabled' ?>>
         </div>
         <div>
           <label>Precio</label>
-          <input class="input" type="number" step="0.01" name="precio" value="0">
+          <input class="input" type="number" step="0.01" name="precio" value="0" <?= $db_ok?'':'disabled' ?>>
         </div>
         <div>
           <label>Categoría</label>
-          <input class="input" name="categoria" placeholder="Ej: Remeras">
+          <input class="input" name="categoria" placeholder="Ej: Remeras" <?= $db_ok?'':'disabled' ?>>
         </div>
         <div style="display:flex;align-items:flex-end">
           <label style="display:flex;align-items:center;gap:.4rem">
-            <input type="checkbox" name="activo" checked> Activo
+            <input type="checkbox" name="activo" checked <?= $db_ok?'':'disabled' ?>> Activo
           </label>
         </div>
       </div>
 
       <div>
         <label>Descripción</label>
-        <textarea class="input" name="descripcion" rows="3" style="width:100%"></textarea>
+        <textarea class="input" name="descripcion" rows="3" style="width:100%" <?= $db_ok?'':'disabled' ?>></textarea>
       </div>
 
       <div class="hr"></div>
 
       <div>
         <label>Imágenes (Cloudinary) — podés subir varias</label>
-        <input class="input" type="file" name="imgs[]" accept="image/*" multiple>
+        <input class="input" type="file" name="imgs[]" accept="image/*" multiple <?= $db_ok?'':'disabled' ?>>
         <div class="row" style="align-items:center;margin-top:.5rem">
           <label>Índice principal</label>
-          <input class="input" type="number" name="primary_idx" value="-1" style="width:90px" title="0 = primera imagen, -1 = auto">
+          <input class="input" type="number" name="primary_idx" value="-1" style="width:90px" title="0 = primera imagen, -1 = auto" <?= $db_ok?'':'disabled' ?>>
         </div>
       </div>
 
@@ -302,19 +298,20 @@ if ($qr) { $productos = $qr->fetch_all(MYSQLI_ASSOC); }
       <div>
         <label>Variantes (talle / color / <b>medidas</b> / stock)</label>
         <div id="vars" class="stack"></div>
-        <button type="button" class="btn" onclick="addVar()">+ Agregar variante</button>
+        <button type="button" class="btn" onclick="addVar()" <?= $db_ok?'':'disabled' ?>>+ Agregar variante</button>
       </div>
 
       <div class="hr"></div>
-
-      <button class="btn primary" type="submit">Guardar producto</button>
+      <button class="btn primary" type="submit" <?= $db_ok?'':'disabled' ?>>Guardar producto</button>
     </form>
   </div>
 
   <!-- Listado -->
-  <div class="section">
+  <div class="section" style="margin-top:1rem">
     <h2 style="margin:0 0 .75rem 0">Productos existentes</h2>
-    <?php if (!$productos): ?>
+    <?php if (!$db_ok): ?>
+      <p class="muted">Sin BD no se puede listar productos.</p>
+    <?php elseif (!$productos): ?>
       <p class="muted">Aún no hay productos cargados.</p>
     <?php else: ?>
       <div class="grid">
@@ -328,11 +325,9 @@ if ($qr) { $productos = $qr->fetch_all(MYSQLI_ASSOC); }
             <div class="muted">Categoría: <?= h($p['categoria'] ?: '—') ?> · $ <?= n2($p['precio']) ?> · <?= ((int)$p['activo']===1 ? 'Activo ✅' : 'Inactivo ⛔') ?></div>
 
             <?php if ($imgs): ?>
-              <div class="thumbs" style="margin-top:.5rem">
-                <?php foreach ($imgs as $im): ?>
-                  <img src="<?= h($im['url']) ?>" alt="">
-                <?php endforeach; ?>
-              </div>
+              <div class="thumbs" style="margin-top:.5rem"><?php foreach ($imgs as $im): ?>
+                <img src="<?= h($im['url']) ?>" alt="">
+              <?php endforeach; ?></div>
             <?php else: ?>
               <div class="muted" style="margin-top:.5rem">Sin imágenes</div>
             <?php endif; ?>
@@ -351,40 +346,6 @@ if ($qr) { $productos = $qr->fetch_all(MYSQLI_ASSOC); }
               </form>
             </div>
 
-            <!-- EDITAR PRODUCTO (colapsable) -->
-            <details style="margin-top:.8rem">
-              <summary>✏️ Editar datos del producto</summary>
-              <form method="post" class="row" style="margin-top:.6rem">
-                <input type="hidden" name="action" value="upd_product">
-                <input type="hidden" name="producto_id" value="<?= $pid ?>">
-                <div style="flex:1;min-width:240px">
-                  <label>Título</label>
-                  <input class="input" name="titulo" value="<?= h($p['titulo']) ?>" required>
-                </div>
-                <div>
-                  <label>Precio</label>
-                  <input class="input" type="number" step="0.01" name="precio" value="<?= h((string)$p['precio']) ?>" required>
-                </div>
-                <div>
-                  <label>Categoría</label>
-                  <input class="input" name="categoria" value="<?= h($p['categoria']) ?>">
-                </div>
-                <div style="display:flex;align-items:end">
-                  <label style="display:flex;gap:8px;align-items:center;margin-bottom:6px">
-                    <input type="checkbox" name="activo" value="1" <?= ((int)$p['activo']===1?'checked':'') ?>> Activo
-                  </label>
-                </div>
-                <div style="width:100%">
-                  <label>Descripción</label>
-                  <textarea class="input" name="descripcion" rows="3"><?= h($p['descripcion'] ?? '') ?></textarea>
-                </div>
-                <div style="width:100%;margin-top:.4rem">
-                  <button class="btn primary" type="submit">💾 Guardar cambios</button>
-                </div>
-              </form>
-            </details>
-
-            <!-- QRs por variante -->
             <?php if ($vars): ?>
               <div class="hr"></div>
               <div class="muted">QR por variante (escanea para vender 1 y descontar stock):</div>
@@ -395,12 +356,10 @@ if ($qr) { $productos = $qr->fetch_all(MYSQLI_ASSOC); }
                   if ($lb==='') $lb='Única';
                   $sellUrl = url('app/pages/venta_qr.php').'?pid='.$pid.'&vid='.$vid.'&sell=1';
                 ?>
-                  <div style="border:1px solid var(--border);border-radius:10px;padding:.5rem">
+                  <div style="border:1px solid #ddd;border-radius:10px;padding:.5rem">
                     <div style="font-weight:600"><?= h($lb) ?></div>
-                    <?php if (!empty($v['medidas'])): ?>
-                      <div class="muted">Medidas: <?= h($v['medidas']) ?></div>
-                    <?php endif; ?>
-                    <img src="<?= qr_url($sellUrl, 120) ?>" alt="QR" width="120" height="120" style="border-radius:8px;border:1px solid var(--border);margin:.35rem 0">
+                    <?php if (!empty($v['medidas'])): ?><div class="muted">Medidas: <?= h($v['medidas']) ?></div><?php endif; ?>
+                    <img src="<?= qr_url($sellUrl, 120) ?>" alt="QR" width="120" height="120" style="border-radius:8px;border:1px solid #ddd;margin:.35rem 0">
                     <div class="row">
                       <a class="btn" href="<?= url('app/pages/etiqueta_var.php').'?pid='.$pid.'&vid='.$vid ?>" target="_blank">Etiqueta</a>
                       <a class="btn" href="<?= $sellUrl ?>" target="_blank">Vender 1</a>
@@ -412,19 +371,16 @@ if ($qr) { $productos = $qr->fetch_all(MYSQLI_ASSOC); }
 
             <div class="hr"></div>
 
-            <!-- Variantes + stock + edición/eliminación -->
             <div class="muted">Variantes</div>
             <?php if ($vars): foreach ($vars as $v): ?>
-              <form method="post" class="row" style="align-items:center;border:1px solid var(--border);border-radius:10px;padding:.35rem .5rem;margin-top:.4rem">
+              <form method="post" class="row" style="align-items:center;border:1px solid #ddd;border-radius:10px;padding:.35rem .5rem;margin-top:.4rem">
                 <input type="hidden" name="producto_id" value="<?= $pid ?>">
                 <input type="hidden" name="variante_id" value="<?= (int)$v['id'] ?>">
-
                 <span class="pill">ID <?= (int)$v['id'] ?></span>
                 <label>Talle</label><input class="input" name="talle"   value="<?= h($v['talle']) ?>"  style="min-width:90px">
                 <label>Color</label><input class="input" name="color"   value="<?= h($v['color']) ?>"  style="min-width:100px">
                 <label>Medidas</label><input class="input" name="medidas" value="<?= h($v['medidas']) ?>" style="min-width:160px">
                 <label>Stock</label><input class="input" type="number" name="stock" value="<?= (int)$v['stock'] ?>" style="width:90px">
-
                 <button class="btn" name="action" value="stock_minus" title="-1">−1</button>
                 <button class="btn" name="action" value="stock_plus"  title="+1">+1</button>
                 <button class="btn primary" name="action" value="upd_variant" title="Guardar">💾</button>
@@ -434,8 +390,7 @@ if ($qr) { $productos = $qr->fetch_all(MYSQLI_ASSOC); }
               <div class="muted" style="margin-top:.4rem">Este producto no tiene variantes.</div>
             <?php endif; ?>
 
-            <!-- Agregar variante -->
-            <form method="post" class="row" style="align-items:center;border:1px dashed var(--border);border-radius:10px;padding:.35rem .5rem;margin-top:.5rem">
+            <form method="post" class="row" style="align-items:center;border:1px dashed #ccc;border-radius:10px;padding:.35rem .5rem;margin-top:.5rem">
               <input type="hidden" name="action" value="add_variant">
               <input type="hidden" name="producto_id" value="<?= $pid ?>">
               <strong style="margin-right:.5rem">+ Variante:</strong>
@@ -447,8 +402,6 @@ if ($qr) { $productos = $qr->fetch_all(MYSQLI_ASSOC); }
             </form>
 
             <div class="hr"></div>
-
-            <!-- Eliminar producto -->
             <form method="post" onsubmit="return confirm('¿Eliminar producto #<?= $pid ?> y todo su contenido (imágenes y variantes)?');">
               <input type="hidden" name="producto_id" value="<?= $pid ?>">
               <button class="btn" name="action" value="eliminar_producto">🗑️ Eliminar producto</button>
@@ -458,7 +411,7 @@ if ($qr) { $productos = $qr->fetch_all(MYSQLI_ASSOC); }
       </div>
     <?php endif; ?>
   </div>
-</div>
+</main>
 
 <script>
 function addVar(){
@@ -475,5 +428,3 @@ function addVar(){
   box.appendChild(row);
 }
 </script>
-
-<?php view('partials/footer.php'); ?>

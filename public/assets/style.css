@@ -15,6 +15,7 @@ body{
   font:16px/1.45 var(--font);
   -webkit-font-smoothing:antialiased; -webkit-tap-highlight-color:transparent;
 }
+
 a:not(.btn), a:not(.btn):visited { color: var(--primary) !important; text-decoration:none }
 a:hover{text-decoration:underline}
 h1,h2,h3,h4,h5,h6{margin:0 0 .6rem;color:#111 !important;font-weight:800;letter-spacing:.2px}
@@ -23,11 +24,21 @@ p,li,td,th,span,small,strong,em{color:#111 !important}
 .container{max-width:1200px;margin:0 auto;padding:16px}
 @media (min-width:840px){ .container{padding:24px} }
 
-/* Navbar */
-.navbar{background:#fff !important;border-bottom:1px solid var(--border);position:sticky;top:0;z-index:50}
-.navbar-inner{display:flex;align-items:center;gap:12px;padding:10px 12px}
+/* ======================== Navbar ======================== */
+.navbar{
+  background:#fff !important;
+  border-bottom:1px solid var(--border);
+  position:sticky; top:0; z-index:50;
+}
+.navbar-inner{
+  display:flex; align-items:center; gap:12px; padding:12px 16px;
+}
 .brand{display:flex;align-items:center;gap:10px;font-weight:800}
-.brand img{height:30px;width:auto}
+.brand img{
+  height:64px; width:auto; display:block; object-fit:contain; object-position:center;
+}
+@media (min-width:840px){ .brand img{ height:80px; } }
+
 .nav{
   display:flex; gap:8px; flex:1 1 auto;
   overflow-x:auto; scrollbar-width:none; -ms-overflow-style:none;
@@ -38,13 +49,25 @@ p,li,td,th,span,small,strong,em{color:#111 !important}
   color:#111 !important; line-height:1; min-height:44px; display:inline-flex; align-items:center;
 }
 .nav a:hover{background:#f8fafc;border-color:var(--border)}
-.nav a.active{color:#fff !important;background:var(--primary);border-color:var(--primary)}
+.nav a.active{background:#e5e7eb;border-color:#e5e7eb}
 
-/* Cards / tablas / forms */
+/* ===== Menú: letras siempre negras ===== */
+.menu a, .menu button, .navbar a, .navbar button{
+  color:#000 !important; font-weight:bold !important; text-decoration:none;
+}
+.menu a:hover, .menu button:hover, .navbar a:hover, .navbar button:hover{
+  color:#000 !important; opacity:.85;
+}
+.menu a.active, .navbar a.active{
+  color:#000 !important; font-weight:bold !important;
+}
+
+/* ===================== Cards / tablas / forms ===================== */
 .card{background:#fff;border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow)}
 .card-header{padding:12px 14px;border-bottom:1px solid var(--border);font-weight:700}
 .card-body{padding:14px}
 .card-footer{padding:12px 14px;border-top:1px solid var(--border);background:#fafafa}
+
 .table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .table{width:100%;border-collapse:separate;border-spacing:0;min-width:600px}
 .table th,.table td{padding:12px 14px;border-bottom:1px solid var(--border);text-align:left}
@@ -57,31 +80,55 @@ label{display:block;font-weight:700;margin:12px 0 6px}
 }
 .input:focus, select:focus, textarea:focus{outline:none;border-color:var(--primary)}
 
+/* ===================== Layout helpers ===================== */
 .row,.grid{display:grid;gap:12px}
 .row.cols-2,.grid.cols-2{grid-template-columns:1fr}
 @media (min-width:840px){
   .row.cols-2,.grid.cols-2{grid-template-columns:1fr 1fr}
 }
 
-/* Botones (tap target ≥44px) */
+/* ========================= Botones ========================= */
 .btn{
   display:inline-flex;gap:8px;align-items:center;justify-content:center;
   padding:12px 16px;border-radius:12px;border:1px solid transparent;cursor:pointer;
   font-weight:700; min-height:44px;
 }
-a.btn, a.btn:visited            { color:#111 !important; }
+a.btn, a.btn:visited{ color:#111 !important; }
 .btn-primary{background:var(--primary);color:#fff !important}
 .btn-primary:hover{background:var(--primary-600)}
 .btn-muted{background:#f3f4f6;color:#111 !important;border-color:var(--border)}
 .btn-danger{background:var(--danger);color:#fff !important}
 
-/* Previews de imágenes */
+/* =================== Previews de imágenes =================== */
 .preview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
 .preview-item{border:1px solid var(--border);border-radius:10px;padding:6px;background:#fff}
 .preview-item img{width:100%;height:100%;object-fit:cover;border-radius:8px}
 @media (min-width:840px){ .preview-grid{grid-template-columns:repeat(6,1fr)} }
 
-/* FAB (botón flotante móvil) */
+/* ======================== Share bar ======================== */
+.sharebar{display:flex;gap:8px;flex-wrap:wrap}
+.sharebar .btn{min-height:40px;padding:10px 14px}
+
+/* ============ Catálogo: encuadre y grillas ============ */
+.ratio-box{position:relative;width:100%;padding-top:125%;overflow:hidden;border-radius:12px;background:#f5f5f5}
+.ratio-box>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+
+.grid.tienda{display:grid;gap:12px;grid-template-columns:repeat(2,1fr)}
+@media (min-width:860px){ .grid.tienda{grid-template-columns:repeat(3,1fr)} }
+@media (min-width:1200px){ .grid.tienda{grid-template-columns:repeat(4,1fr)} }
+
+/* ==================== Galería / Lightbox ==================== */
+.gallery-main{border-radius:12px;overflow:hidden}
+.gallery-thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.gallery-thumbs img{width:72px;height:72px;object-fit:cover;border-radius:10px;cursor:pointer;opacity:.9;border:2px solid transparent}
+.gallery-thumbs img.active{opacity:1;border-color:#0d6efd}
+
+.lb{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;z-index:9999}
+.lb.open{display:flex}
+.lb img{max-width:95vw;max-height:90vh;border-radius:12px}
+.lb .close{position:absolute;top:14px;right:14px;font-size:26px;color:#fff;cursor:pointer}
+
+/* =================== Botón flotante móvil =================== */
 .fab{
   position:fixed; right:16px; bottom:16px;
   background:var(--primary); color:#fff; text-decoration:none;
@@ -92,73 +139,6 @@ a.btn, a.btn:visited            { color:#111 !important; }
 .fab span{display:inline-block}
 .fab .dot{width:10px;height:10px;border-radius:50%;background:#fff;opacity:.8}
 @media (min-width:840px){ .fab{display:none} } /* solo celulares */
-/* === Logo más grande === */
-.navbar-inner{
-  padding: 12px 16px;      /* un poco más de alto al header */
-  align-items: center;
-  gap: 14px;
-}
 
-.brand img{
-  height: 64px;            /* antes 30–40px */
-  width: auto;
-  display: block;
-  object-fit: contain;
-  object-position: center;
-}
-
-/* En escritorio, todavía más grande */
-@media (min-width: 840px){
-  .brand img{ height: 80px; }
-}
-
-/* Si en pantallas MUY chicas el menú no entra, ocultamos el texto "TAGUS" al lado del logo */
-@media (max-width: 380px){
-  .brand span{ display:none; }
-}
-/* Share bar */
-.sharebar{display:flex;gap:8px;flex-wrap:wrap}
-.sharebar .btn{min-height:40px;padding:10px 14px}
-/* === Imágenes encuadradas (cover) === */
-.ratio-box{position:relative;width:100%;padding-top:125%;overflow:hidden;border-radius:12px;background:#f5f5f5}
-.ratio-box > img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
-
-/* Galería detalle */
-.gallery-main{border-radius:12px;overflow:hidden}
-.gallery-thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-.gallery-thumbs img{width:72px;height:72px;object-fit:cover;border-radius:10px;cursor:pointer;opacity:.9;border:2px solid transparent}
-.gallery-thumbs img.active{opacity:1;border-color:#0d6efd}
-
-/* Lightbox simple */
-.lb{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;z-index:9999}
-.lb.open{display:flex}
-.lb img{max-width:95vw;max-height:90vh;border-radius:12px}
-.lb .close{position:absolute;top:14px;right:14px;font-size:26px;color:#fff;cursor:pointer}
-/* Catálogo: encuadre y grillas */
-.ratio-box{position:relative;width:100%;padding-top:125%;overflow:hidden;border-radius:12px;background:#f5f5f5}
-.ratio-box>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-@media (min-width: 860px){ .grid.tienda{grid-template-columns:repeat(3,1fr)!important} }
-@media (min-width: 1200px){ .grid.tienda{grid-template-columns:repeat(4,1fr)!important} }
-/* ===== Menú: letras siempre negras ===== */
-.menu a,
-.menu button,
-.navbar a,
-.navbar button {
-  color: #000 !important;      /* negro permanente */
-  font-weight: bold !important; /* siempre negrita */
-  text-decoration: none;
-}
-
-.menu a:hover,
-.menu button:hover,
-.navbar a:hover,
-.navbar button:hover {
-  color: #000 !important;       /* sigue negro al pasar el mouse */
-  opacity: 0.8;                 /* leve efecto sin cambiar color */
-}
-
-.menu a.active,
-.navbar a.active {
-  color: #000 !important;       /* activo también negro */
-  font-weight: bold !important;
-}
+/* =================== Ajustes responsive menores =================== */
+@media (max-width:380px){ .brand span{ display:none; } }

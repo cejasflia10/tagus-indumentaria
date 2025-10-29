@@ -59,19 +59,21 @@ if ($conexion && !$conexion->connect_errno) {
   @$conexion->set_charset('utf8mb4');
 }
 
-/* Cloudinary (Cloudy) — reemplazá por tus credenciales reales */
+/* Cloudinary (Cloudy) — (se dejan tal cual) */
 if (!defined('CLOUD_ENABLED'))       define('CLOUD_ENABLED', true);
 if (!defined('CLOUD_NAME'))          define('CLOUD_NAME', 'ddfugds9b');
 if (!defined('CLOUD_API_KEY'))       define('CLOUD_API_KEY', '224378857979713');
 if (!defined('CLOUD_API_SECRET'))    define('CLOUD_API_SECRET', 'BtFD6D0D4Ktd_SpKQ8NuI_jFlTQ');
 if (!defined('CLOUD_FOLDER'))        define('CLOUD_FOLDER', 'tagus_indumentaria');
 
-/* Tablas mínimas */
+/* ===== Utilidad: existe la tabla ===== */
 function table_exists(mysqli $db, string $t): bool {
   $t = $db->real_escape_string($t);
   $res = $db->query("SHOW TABLES LIKE '{$t}'");
-  return $res && $res->num_rows > 0;
+  return ($res && $res->num_rows > 0);
 }
+
+/* ===== Tablas mínimas ===== */
 if (!table_exists($conexion, 'ind_productos')) {
   $conexion->query("
     CREATE TABLE ind_productos (
@@ -85,6 +87,7 @@ if (!table_exists($conexion, 'ind_productos')) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   ");
 }
+
 if (!table_exists($conexion, 'ind_imagenes')) {
   $conexion->query("
     CREATE TABLE ind_imagenes (
@@ -96,6 +99,7 @@ if (!table_exists($conexion, 'ind_imagenes')) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   ");
 }
+
 if (!table_exists($conexion, 'ind_variantes')) {
   $conexion->query("
     CREATE TABLE ind_variantes (
@@ -115,6 +119,7 @@ if (!table_exists($conexion, 'ind_variantes')) {
     $conexion->query("ALTER TABLE ind_variantes ADD COLUMN medidas VARCHAR(120) NULL AFTER color");
   }
 }
+
 /* Ventas por QR */
 if (!table_exists($conexion, 'ind_ventas')) {
   $conexion->query("
@@ -131,14 +136,8 @@ if (!table_exists($conexion, 'ind_ventas')) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   ");
 }
+
 /* === Pedidos (cabecera + items) === */
-if (!function_exists('table_exists')) {
-  function table_exists(mysqli $db, string $t): bool {
-    $t = $db->real_escape_string($t);
-    $res = $db->query("SHOW TABLES LIKE '{$t}'");
-    return $res && $res->num_rows > 0;
-  }
-}
 if (!table_exists($conexion, 'ind_pedidos')) {
   $conexion->query("
     CREATE TABLE ind_pedidos (
@@ -156,6 +155,7 @@ if (!table_exists($conexion, 'ind_pedidos')) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   ");
 }
+
 if (!table_exists($conexion, 'ind_pedido_items')) {
   $conexion->query("
     CREATE TABLE ind_pedido_items (
@@ -175,14 +175,6 @@ if (!table_exists($conexion, 'ind_pedido_items')) {
 }
 
 /* === Contabilidad: gastos simples === */
-if (!function_exists('table_exists')) {
-  function table_exists(mysqli $db, string $t): bool {
-    $t = $db->real_escape_string($t);
-    $res = $db->query("SHOW TABLES LIKE '{$t}'");
-    return $res && $res->num_rows > 0;
-  }
-}
-
 if (!table_exists($conexion, 'cont_gastos')) {
   $conexion->query("
     CREATE TABLE cont_gastos (
@@ -198,14 +190,8 @@ if (!table_exists($conexion, 'cont_gastos')) {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   ");
 }
+
 /* === Ajustes simples (clave/valor) === */
-if (!function_exists('table_exists')) {
-  function table_exists(mysqli $db, string $t): bool {
-    $t = $db->real_escape_string($t);
-    $res = $db->query("SHOW TABLES LIKE '{$t}'");
-    return $res && $res->num_rows > 0;
-  }
-}
 if (!table_exists($conexion, 'ind_ajustes')) {
   $conexion->query("
     CREATE TABLE ind_ajustes (
@@ -228,4 +214,37 @@ function get_ajuste(mysqli $db, string $k, ?string $def=null): ?string {
   $r = $db->query("SELECT v FROM ind_ajustes WHERE k='{$kq}' LIMIT 1");
   if ($r && $r->num_rows){ $x = $r->fetch_assoc()['v']; return ($x===null||$x==='') ? $def : $x; }
   return $def;
+}
+
+/* ================== Helpers de IMAGEN ================== */
+
+/**
+ * Normaliza la URL de imagen:
+ * - Si ya es absoluta (http/https): la devuelve.
+ * - Si parece public_id de Cloudinary (sin slash inicial y no es ruta local): arma URL con transformación.
+ * - Si es ruta local relativa (ej. img/... o uploads/...): la sirve tal cual desde la raíz del sitio.
+ * - Si viene vacía: usa placeholder local.
+ */
+function img_url(string $raw, int $w = 480, int $h = 480, bool $crop = true): string {
+  $raw = trim($raw);
+  if ($raw === '') return img_fallback();
+
+  // Absoluta
+  if (preg_match('~^https?://~i', $raw)) {
+    return $raw;
+  }
+
+  // Cloudinary public_id (no empieza con ./ o / y no contiene backslash tipo Windows)
+  if (defined('CLOUD_ENABLED') && CLOUD_ENABLED && !preg_match('~^[./]~', $raw)) {
+    $transf = $crop ? "c_fill,w:{$w},h:{$h}" : "w:{$w}";
+    return "https://res.cloudinary.com/".CLOUD_NAME."/image/upload/{$transf}/".rawurlencode($raw);
+  }
+
+  // Ruta local (relativa)
+  return '/'.ltrim($raw, '/');
+}
+
+/** Placeholder local (asegurate de tener /img/no-image.png en el proyecto) */
+function img_fallback(): string {
+  return '/img/no-image.png';
 }
