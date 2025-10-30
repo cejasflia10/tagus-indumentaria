@@ -182,10 +182,10 @@ if (!table_exists($conexion, 'cont_gastos')) {
       fecha DATE NOT NULL,
       categoria VARCHAR(100) NULL,
       concepto VARCHAR(255) NOT NULL,
-      medio_pago VARCHAR(50) NULL,      -- Efectivo / Transferencia / Tarjeta
+      medio_pago VARCHAR(50) NULL,
       monto DECIMAL(10,2) NOT NULL DEFAULT 0.00,
       nota TEXT NULL,
-      voucher_url VARCHAR(500) NULL,    -- foto ticket/factura (Cloudinary)
+      voucher_url VARCHAR(500) NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
   ");
@@ -218,33 +218,49 @@ function get_ajuste(mysqli $db, string $k, ?string $def=null): ?string {
 
 /* ================== Helpers de IMAGEN ================== */
 
+/** Placeholder local (asegurate de tener /img/no-image.png) */
+function img_fallback(): string {
+  return '/img/no-image.png';
+}
+
 /**
  * Normaliza la URL de imagen:
- * - Si ya es absoluta (http/https): la devuelve.
- * - Si parece public_id de Cloudinary (sin slash inicial y no es ruta local): arma URL con transformación.
- * - Si es ruta local relativa (ej. img/... o uploads/...): la sirve tal cual desde la raíz del sitio.
- * - Si viene vacía: usa placeholder local.
+ * - http/https: si es Cloudinary e incluye /upload/, inyecta transformación válida.
+ * - public_id Cloudinary (sin http): arma URL completa con transformación.
+ * - ruta local: la devuelve relativa.
  */
 function img_url(string $raw, int $w = 480, int $h = 480, bool $crop = true): string {
   $raw = trim($raw);
   if ($raw === '') return img_fallback();
 
-  // Absoluta
+  // Transformación correcta para Cloudinary (con subrayados)
+  $transf = $crop
+    ? "c_fill,g_auto,w_{$w},h_{$h},q_auto,f_auto"
+    : "g_auto,w_{$w},q_auto,f_auto";
+
+  // 1) URL absoluta
   if (preg_match('~^https?://~i', $raw)) {
+    // Si es Cloudinary y trae /upload/, inyectar la transformación
+    if (strpos($raw, 'res.cloudinary.com') !== false && preg_match('~/(image|video)/upload/~', $raw)) {
+      // Soporta /upload/, /upload/v123/, /upload/c_scale,w_900/, etc.
+      return preg_replace(
+        '~/(image|video)/upload/(?:[^/]+/)?~',
+        '/$1/upload/' . $transf . '/',
+        $raw,
+        1
+      );
+    }
+    // Otras URLs absolutas: devolver tal cual
     return $raw;
   }
 
-  // Cloudinary public_id (no empieza con ./ o / y no contiene backslash tipo Windows)
-  if (defined('CLOUD_ENABLED') && CLOUD_ENABLED && !preg_match('~^[./]~', $raw)) {
-    $transf = $crop ? "c_fill,w:{$w},h:{$h}" : "w:{$w}";
-    return "https://res.cloudinary.com/".CLOUD_NAME."/image/upload/{$transf}/".rawurlencode($raw);
+  // 2) public_id de Cloudinary (no empieza con ./ ni /)
+  if (defined('CLOUD_ENABLED') && CLOUD_ENABLED && defined('CLOUD_NAME') && CLOUD_NAME
+      && !preg_match('~^[./]~', $raw)) {
+    $pid = str_replace('%2F','/', rawurlencode($raw)); // respetar subcarpetas del public_id
+    return "https://res.cloudinary.com/" . CLOUD_NAME . "/image/upload/{$transf}/{$pid}";
   }
 
-  // Ruta local (relativa)
-  return '/'.ltrim($raw, '/');
-}
-
-/** Placeholder local (asegurate de tener /img/no-image.png en el proyecto) */
-function img_fallback(): string {
-  return '/img/no-image.png';
+  // 3) Ruta local (relativa)
+  return '/' . ltrim($raw, '/');
 }

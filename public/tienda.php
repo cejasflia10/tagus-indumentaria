@@ -1,5 +1,5 @@
 <?php
-// public/tienda.php — Catálogo público con variantes (talle/color) + modal galería + lightbox (fix thumbs)
+// public/tienda.php — Catálogo público con variantes (talle/color) + modal galería + lightbox (fix thumbs + fallback seguro)
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) session_start();
 
@@ -13,7 +13,7 @@ if (!function_exists('h')) {
   function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
 }
 if (!function_exists('img_url')) {
-  // Devuelve imagen recortada cover si es Cloudinary, o la URL tal cual.
+  // Devuelve imagen recortada (cover) si es Cloudinary, o la URL tal cual.
   function img_url(?string $url, int $w=520, int $h=620): string {
     $u = trim((string)($url ?? ''));
     if ($u === '') return '';
@@ -46,7 +46,7 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   if (!$p || !$p->num_rows) { echo json_encode(['ok'=>false]); exit; }
   $prod = $p->fetch_assoc();
 
-  // Imágenes del producto (en formato {full, mini})
+  // Imágenes del producto
   $imgs = [];
   $ri = $conexion->query("SELECT url FROM ind_imagenes WHERE producto_id={$id} ORDER BY is_primary DESC, id ASC");
   if ($ri && $ri->num_rows) {
@@ -68,7 +68,7 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
     'titulo'=> (string)($prod['titulo'] ?? ''),
     'descripcion'=> (string)($prod['descripcion'] ?? ''),
     'precio'=> (float)($prod['precio'] ?? 0),
-    'imgs'  => $imgs, // puede venir vacío; el front hace fallback
+    'imgs'  => $imgs,
     'vars'  => $vars
   ], JSON_UNESCAPED_UNICODE);
   exit;
@@ -133,7 +133,6 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
   .g-thumbs img{width:74px;height:74px;object-fit:cover;border-radius:10px;cursor:pointer;border:2px solid transparent;opacity:.95}
   .g-thumbs img.active{border-color:#0d6efd;opacity:1}
 
-  /* Lightbox fullscreen */
   .lb{position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;justify-content:center;z-index:2147483648}
   .lb.open{display:flex}
   .lb img{max-width:96vw;max-height:92vh;border-radius:12px}
@@ -166,7 +165,8 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
       <div class="catalog-grid">
         <?php if ($prods && $prods->num_rows): while($p = $prods->fetch_assoc()):
           $pid    = (int)$p['id'];
-          $thumb0 = $p['foto_url'] ? img_url($p['foto_url']) : '';
+          $foto   = trim($p['foto_url'] ?? '');
+          $thumb0 = $foto !== '' ? img_url($foto) : $noimg;
           $thumb  = $thumb0 !== '' ? $thumb0 : $noimg;
           $talles = trim($p['talles'] ?? '');
           $colores= trim($p['colores'] ?? '');
@@ -175,7 +175,7 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
           <button type="button" onclick="openModalById(<?= $pid ?>)" style="all:unset;cursor:pointer;display:block">
             <div class="ratio-box">
               <img src="<?=h($thumb)?>" alt="<?=h($p['titulo'])?>" loading="lazy"
-                   onerror="this.src='<?=h($noimg)?>'">
+                   onerror="this.onerror=null;this.src='<?=h($noimg)?>'">
             </div>
           </button>
           <div class="prod-body">
@@ -264,10 +264,8 @@ function copyLink(url, el){
   lb.addEventListener('click', (e)=>{ if(e.target===lb || e.target===lbClose) closeLb(); });
   lbClose.addEventListener('click', closeLb);
 
-  // Click en la imagen principal => lightbox
   mMain.addEventListener('click', ()=>{ if (mMain.src) openLb(mMain.src); });
 
-  // Exponer global para las tarjetas/botones
   window.openModalById = async function(id){
     try{
       const url = new URL(window.location.href);
@@ -282,7 +280,6 @@ function copyLink(url, el){
       mPrice.textContent = '$ ' + (Number(j.precio||0).toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}));
       mDesc.textContent  = (j.descripcion||'').trim();
 
-      // variantes -> talles/colores
       mVars.innerHTML = '';
       if (Array.isArray(j.vars) && j.vars.length){
         const talles  = [...new Set(j.vars.map(v=>v.talle).filter(Boolean))].join(', ');
@@ -290,45 +287,3 @@ function copyLink(url, el){
         let html = '';
         if (talles)  html += '<div><b>Talles:</b> '+talles+'</div>';
         if (colores) html += '<div><b>Colores:</b> '+colores+'</div>';
-        mVars.innerHTML = html;
-      }
-
-      // acciones (link real a comprar)
-      mActions.innerHTML = '<a class="btn btn-primary" href="ver_producto.php?id='+j.id+'">Elegir variante y comprar</a>';
-
-      // galería — acepta formato {full,mini} o strings (compat)
-      mThumbs.innerHTML = '';
-      let imgs = [];
-      if (Array.isArray(j.imgs) && j.imgs.length){
-        if (typeof j.imgs[0] === 'string'){
-          imgs = j.imgs.map(u => ({full:u, mini:u}));
-        } else {
-          imgs = j.imgs.map(o => ({full:o.full || o.mini, mini:o.mini || o.full}));
-        }
-      } else {
-        const noimg = '<?=h($noimg)?>';
-        imgs = [{full:noimg, mini:noimg}];
-      }
-
-      mMain.src = imgs[0].full;
-
-      imgs.forEach((o,idx)=>{
-        const im = document.createElement('img');
-        im.src = o.mini || o.full;
-        if (idx===0) im.classList.add('active');
-        im.addEventListener('click', ()=>{
-          mMain.src = o.full || o.mini;
-          [...mThumbs.querySelectorAll('img')].forEach(x=>x.classList.remove('active'));
-          im.classList.add('active');
-        });
-        mThumbs.appendChild(im);
-      });
-
-      openModal();
-    }catch(e){
-      // Si algo falla, ir al detalle
-      window.location.href = 'ver_producto.php?id='+id;
-    }
-  };
-})();
-</script>
