@@ -1,5 +1,5 @@
 <?php
-// public/tienda.php — Catálogo público con variantes (talle/color) + modal galería + lightbox (fix thumbs + fallback seguro)
+// public/tienda.php — Catálogo público con variantes + galería + lightbox (thumbs Cloudinary + fallback infalible)
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) session_start();
 
@@ -13,7 +13,7 @@ if (!function_exists('h')) {
   function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
 }
 if (!function_exists('img_url')) {
-  // Devuelve imagen recortada (cover) si es Cloudinary, o la URL tal cual.
+  // Devuelve imagen recortada (cover) si es Cloudinary; si no, devuelve tal cual.
   function img_url(?string $url, int $w=520, int $h=620): string {
     $u = trim((string)($url ?? ''));
     if ($u === '') return '';
@@ -37,7 +37,7 @@ if (!function_exists('thumb_url')) {
   }
 }
 
-/* ===== Endpoint modal JSON (galería e info detallada) ===== */
+/* ===== Endpoint modal JSON ===== */
 if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   header('Content-Type: application/json; charset=utf-8');
   $id = (int)$_GET['id'];
@@ -46,7 +46,6 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   if (!$p || !$p->num_rows) { echo json_encode(['ok'=>false]); exit; }
   $prod = $p->fetch_assoc();
 
-  // Imágenes del producto
   $imgs = [];
   $ri = $conexion->query("SELECT url FROM ind_imagenes WHERE producto_id={$id} ORDER BY is_primary DESC, id ASC");
   if ($ri && $ri->num_rows) {
@@ -57,7 +56,6 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
     }
   }
 
-  // Variantes
   $vars = [];
   $rv = $conexion->query("SELECT talle,color,stock,medidas FROM ind_variantes WHERE producto_id={$id} ORDER BY talle,color");
   if ($rv && $rv->num_rows) { while($r=$rv->fetch_assoc()) $vars[] = $r; }
@@ -81,8 +79,8 @@ $like = '%'.$conexion->real_escape_string($q).'%';
 $sql = "
   SELECT p.id, p.titulo, p.precio,
          (SELECT url FROM ind_imagenes WHERE producto_id=p.id ORDER BY is_primary DESC, id ASC LIMIT 1) AS foto_url,
-         GROUP_CONCAT(DISTINCT v.talle ORDER BY v.talle SEPARATOR ', ') AS talles,
-         GROUP_CONCAT(DISTINCT v.color ORDER BY v.color SEPARATOR ', ') AS colores
+         GROUP_CONCAT(DISTINCT NULLIF(TRIM(v.talle), '') ORDER BY v.talle SEPARATOR ', ') AS talles,
+         GROUP_CONCAT(DISTINCT NULLIF(TRIM(v.color), '') ORDER BY v.color SEPARATOR ', ') AS colores
   FROM ind_productos p
   LEFT JOIN ind_variantes v ON v.producto_id = p.id
   ".($q !== '' ? "WHERE p.titulo LIKE '{$like}'" : '')."
@@ -92,12 +90,20 @@ $sql = "
 ";
 $prods = $conexion->query($sql);
 
-/* ===== URLs base ===== */
+/* ===== URLs base + fallbacks ===== */
 $scriptDir = rtrim(str_replace('\\','/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
 $BASE = preg_replace('#/public$#', '', $scriptDir);
 if ($BASE === '') $BASE = '/';
 $hrefMisPedidos = rtrim($BASE, '/').'/public/mis_pedidos.php';
-$noimg          = rtrim($BASE, '/').'/public/assets/noimg.png';
+$noimgPath      = rtrim($BASE, '/').'/public/assets/noimg.png';
+
+/* Fallback infalible (SVG inline) para cuando no existe noimg.png */
+$NOIMG_DATA = 'data:image/svg+xml;utf8,' . rawurlencode(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="720" viewBox="0 0 600 720">'
+  .'<rect width="100%" height="100%" fill="#f3f4f6"/><g fill="#9ca3af" font-family="Arial,Helvetica,sans-serif">'
+  .'<text x="50%" y="46%" font-size="22" text-anchor="middle">Sin imagen</text>'
+  .'<text x="50%" y="53%" font-size="14" text-anchor="middle">TAGUS</text></g></svg>'
+);
 
 $proto     = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https://' : 'http://';
 $tiendaUrl = $proto . ($_SERVER['HTTP_HOST'] ?? 'localhost') . rtrim($BASE, '/') . '/public/tienda.php';
@@ -117,7 +123,6 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
   .prod-price{color:#6b7280;font-size:.9rem;margin-top:2px}
   .pill{display:inline-block;font-size:.72rem;padding:.15rem .45rem;border-radius:999px;background:#f3f4f6;color:#374151}
 
-  /* ===== Modal ===== */
   .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.85);z-index:2147483647}
   .modal.open{display:flex}
   .modal-content{width:min(980px,95vw);max-height:92vh;background:#fff;border-radius:16px;overflow:hidden;display:grid;grid-template-rows:auto 1fr}
@@ -166,16 +171,22 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
         <?php if ($prods && $prods->num_rows): while($p = $prods->fetch_assoc()):
           $pid    = (int)$p['id'];
           $foto   = trim($p['foto_url'] ?? '');
-          $thumb0 = $foto !== '' ? img_url($foto) : $noimg;
-          $thumb  = $thumb0 !== '' ? $thumb0 : $noimg;
-          $talles = trim($p['talles'] ?? '');
-          $colores= trim($p['colores'] ?? '');
+          $thumb0 = $foto !== '' ? img_url($foto) : '';
+          // Fallback ordenado: Cloudinary -> noimg.png -> SVG inline
+          $thumb  = $thumb0 !== '' ? $thumb0 : ( $noimgPath ?: $NOIMG_DATA );
+          $talles = trim((string)($p['talles'] ?? '')); if ($talles==='') $talles = '';
+          $colores= trim((string)($p['colores'] ?? '')); if ($colores==='') $colores = '';
         ?>
         <div class="prod-card">
           <button type="button" onclick="openModalById(<?= $pid ?>)" style="all:unset;cursor:pointer;display:block">
             <div class="ratio-box">
-              <img src="<?=h($thumb)?>" alt="<?=h($p['titulo'])?>" loading="lazy"
-                   onerror="this.onerror=null;this.src='<?=h($noimg)?>'">
+              <img
+                src="<?=h($thumb)?>"
+                alt="<?=h($p['titulo'])?>"
+                decoding="async"
+                loading="lazy"
+                data-fallback="<?=h($NOIMG_DATA)?>"
+                onerror="this.onerror=null;this.src=this.dataset.fallback;">
             </div>
           </button>
           <div class="prod-body">
@@ -264,7 +275,8 @@ function copyLink(url, el){
   lb.addEventListener('click', (e)=>{ if(e.target===lb || e.target===lbClose) closeLb(); });
   lbClose.addEventListener('click', closeLb);
 
-  mMain.addEventListener('click', ()=>{ if (mMain.src) openLb(mMain.src); });
+  // Clic en imagen principal => lightbox
+  document.getElementById('mMain').addEventListener('click', ()=>{ if (mMain.src) openLb(mMain.src); });
 
   window.openModalById = async function(id){
     try{
@@ -287,3 +299,43 @@ function copyLink(url, el){
         let html = '';
         if (talles)  html += '<div><b>Talles:</b> '+talles+'</div>';
         if (colores) html += '<div><b>Colores:</b> '+colores+'</div>';
+      mVars.innerHTML = html;
+      }
+
+      mActions.innerHTML = '<a class="btn btn-primary" href="ver_producto.php?id='+j.id+'">Elegir variante y comprar</a>';
+
+      // Galería: si no hay imágenes o están vacías, usar SVG inline
+      const FALLBACK = '<?= $NOIMG_DATA ?>';
+      mThumbs.innerHTML = '';
+      let imgs = [];
+      if (Array.isArray(j.imgs) && j.imgs.length){
+        imgs = j.imgs.map(o => {
+          if (typeof o === 'string') return {full:o||FALLBACK, mini:o||FALLBACK};
+          return {full:(o.full||o.mini||FALLBACK), mini:(o.mini||o.full||FALLBACK)};
+        });
+      } else {
+        imgs = [{full:FALLBACK, mini:FALLBACK}];
+      }
+
+      mMain.src = imgs[0].full || FALLBACK;
+
+      imgs.forEach((o,idx)=>{
+        const im = document.createElement('img');
+        im.src = o.mini || o.full || FALLBACK;
+        if (idx===0) im.classList.add('active');
+        im.onerror = ()=>{ im.src = FALLBACK; };
+        im.addEventListener('click', ()=>{
+          mMain.src = o.full || o.mini || FALLBACK;
+          [...mThumbs.querySelectorAll('img')].forEach(x=>x.classList.remove('active'));
+          im.classList.add('active');
+        });
+        mThumbs.appendChild(im);
+      });
+
+      openModal();
+    }catch(e){
+      window.location.href = 'ver_producto.php?id='+id;
+    }
+  };
+})();
+</script>
