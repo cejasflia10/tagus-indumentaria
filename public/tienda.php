@@ -1,5 +1,5 @@
 <?php
-// public/tienda.php — Catálogo público con variantes + galería + lightbox (thumbs Cloudinary + fallback)
+// public/tienda.php — Catálogo público con variantes + galería + lightbox
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) session_start();
 
@@ -12,24 +12,24 @@ if (!isset($conexion) || !($conexion instanceof mysqli)) { http_response_code(50
 if (!function_exists('h')) {
   function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
 }
-// Cover 5:6 (detalle)
+// Detalle (modal): recorte 5:6
 if (!function_exists('img_url')) {
-  function img_url(?string $url, int $w=520, int $h=620): string {
+  function img_url(?string $url, int $w=900, int $h=1100): string {
     $u = trim((string)($url ?? '')); if ($u==='') return '';
     if (strpos($u,'res.cloudinary.com')!==false && strpos($u,'/upload/')!==false){
       [$a,$b] = explode('/upload/',$u,2);
-      return $a.'/upload/f_auto,q_auto,c_fill,w_'.$w.',h_'.$h.'/'.$b;
+      return $a.'/upload/f_auto,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h.'/'.$b;
     }
     return $u;
   }
 }
-// Thumb cuadrada (grilla y miniaturas)
+// Mini cuadrada (si alguna vez la necesitás)
 if (!function_exists('thumb_url')) {
   function thumb_url(?string $url, int $size=200): string {
     $u = trim((string)($url ?? '')); if ($u==='') return '';
     if (strpos($u,'res.cloudinary.com')!==false && strpos($u,'/upload/')!==false){
       [$a,$b] = explode('/upload/',$u,2);
-      return $a.'/upload/f_auto,q_auto,c_fill,w_'.$size.',h_'.$size.'/'.$b;
+      return $a.'/upload/f_auto,q_auto,c_fill,g_auto,w_'.$size.',h_'.$size.'/'.$b;
     }
     return $u;
   }
@@ -48,7 +48,8 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   $ri = $conexion->query("SELECT url FROM ind_imagenes WHERE producto_id={$id} ORDER BY is_primary DESC, id ASC");
   if ($ri && $ri->num_rows) {
     while($r = $ri->fetch_assoc()){
-      $full = img_url($r['url'], 900, 1100);
+      $full = img_url($r['url'], 900, 1100); // transform para grande
+      // mini podría usar thumb_url, pero si prefieres evitar transform: $mini = $r['url'];
       $mini = thumb_url($r['url'], 160);
       $imgs[] = ['full'=>$full ?: '', 'mini'=>$mini ?: $full];
     }
@@ -92,6 +93,7 @@ if ($BASE === '') $BASE = '/';
 $hrefMisPedidos = rtrim($BASE, '/').'/public/mis_pedidos.php';
 $noimgPath      = rtrim($BASE, '/').'/public/assets/noimg.png';
 
+/* Fallback SVG inline por si no existe noimg.png */
 $NOIMG_DATA = 'data:image/svg+xml;utf8,' . rawurlencode(
   '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="720" viewBox="0 0 600 720">'
  .'<rect width="100%" height="100%" fill="#f3f4f6"/><g fill="#9ca3af" font-family="Arial,Helvetica,sans-serif">'
@@ -111,7 +113,7 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
   .prod-card{cursor:pointer;border-radius:14px;box-shadow:0 1px 5px rgba(0,0,0,.06);transition:transform .12s, box-shadow .12s;background:#fff}
   .prod-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,.08)}
   .prod-body{padding:8px 10px 10px}
-  .ratio-box{position:relative;width:100%;padding-top:120%;overflow:hidden;border-radius:14px 14px 0 0;background:#f6f7f8}
+  .ratio-box{position:relative;width:100%;padding-top:120%;overflow:hidden;border-radius:14px 14px 0 0;background:#f6f7f6}
   .ratio-box>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
   .prod-title{font-weight:700;font-size:.95rem;line-height:1.1;margin-top:6px;min-height:2.2em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .prod-price{color:#6b7280;font-size:.9rem;margin-top:2px}
@@ -163,19 +165,19 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
 
       <div class="catalog-grid">
         <?php if ($prods && $prods->num_rows): while($p = $prods->fetch_assoc()):
-          $pid    = (int)$p['id'];
-          $foto   = trim($p['foto_url'] ?? '');
-          // 🔧 Usar SIEMPRE thumb_url en la grilla
-          $thumb0 = $foto !== '' ? thumb_url($foto, 520) : '';
-          $thumb  = $thumb0 !== '' ? $thumb0 : ($noimgPath ?: $NOIMG_DATA);
-          $talles = trim((string)($p['talles'] ?? ''));
-          $colores= trim((string)($p['colores'] ?? ''));
+          $pid   = (int)$p['id'];
+          $foto  = trim((string)($p['foto_url'] ?? ''));
+          // 🔧 USAR LA URL ORIGINAL EN LA GRILLA (sin transformaciones)
+          $thumb = $foto !== '' ? $foto : ($noimgPath ?: $NOIMG_DATA);
+          $talles  = trim((string)($p['talles'] ?? ''));
+          $colores = trim((string)($p['colores'] ?? ''));
         ?>
         <div class="prod-card">
           <button type="button" onclick="openModalById(<?= $pid ?>)" style="all:unset;cursor:pointer;display:block">
             <div class="ratio-box">
               <img
                 src="<?=h($thumb)?>"
+                title="<?=h($foto)?>"
                 alt="<?=h($p['titulo'])?>"
                 decoding="async" loading="lazy"
                 data-fallback="<?=h($NOIMG_DATA)?>"
