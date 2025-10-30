@@ -62,9 +62,9 @@ if ($conexion && !$conexion->connect_errno) {
 /* Cloudinary (Cloudy) — (se dejan tal cual) */
 if (!defined('CLOUD_ENABLED'))       define('CLOUD_ENABLED', true);
 if (!defined('CLOUD_NAME'))          define('CLOUD_NAME', 'ddfugds9b');
-if (!defined('CLOUD_API_KEY'))       define('CLOUD_API_KEY', '224378857979713');
-if (!defined('CLOUD_API_SECRET'))    define('CLOUD_API_SECRET', 'BtFD6D0D4Ktd_SpKQ8NuI_jFlTQ');
-if (!defined('CLOUD_FOLDER'))        define('CLOUD_FOLDER', 'tagus_indumentaria');
+if (!defined('CLOUD_API_KEY'))       define('CLOUD_API_KEY', '657814174747186');
+if (!defined('CLOUD_API_SECRET'))    define('CLOUD_API_SECRET', 'TKo5BRiKCEjxSLFzn2DLbz_ji4c');
+if (!defined('CLOUD_FOLDER'))        define('CLOUD_FOLDER', 'Root');
 
 /* ===== Utilidad: existe la tabla ===== */
 function table_exists(mysqli $db, string $t): bool {
