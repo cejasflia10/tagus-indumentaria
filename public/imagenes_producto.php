@@ -36,7 +36,7 @@ if (($_POST['action'] ?? '') === 'cover') {
   exit;
 }
 
-// Eliminar imagen
+// Eliminar imagen (solo BD; no borra en Cloudinary a propósito)
 if (($_POST['action'] ?? '') === 'del') {
   $iid = (int)($_POST['id'] ?? 0);
   $st = $conexion->prepare("DELETE FROM ind_imagenes WHERE id=? AND producto_id=?");
@@ -49,62 +49,100 @@ if (($_POST['action'] ?? '') === 'del') {
 // Subida múltiple a Cloudinary
 $err = null;
 if (($_POST['action'] ?? '') === 'upload' && !empty($_FILES['fotos']['name'][0])) {
-  if (!CLOUD_ENABLED) {
+  // Validaciones mínimas de entorno (sin tocar config)
+  if (!defined('CLOUD_ENABLED') || !CLOUD_ENABLED) {
     $err = 'Cloudinary no está habilitado.';
   } elseif (!extension_loaded('curl')) {
     $err = 'PHP sin extensión cURL. Activala en php.ini (extension=curl) y reiniciá Apache.';
+  } elseif (!defined('CLOUD_NAME') || !CLOUD_NAME || !defined('CLOUD_API_KEY') || !CLOUD_API_KEY || !defined('CLOUD_API_SECRET') || !CLOUD_API_SECRET) {
+    $err = 'Faltan credenciales Cloudinary (CLOUD_NAME/API_KEY/API_SECRET).';
   } else {
     // ¿ya hay portada?
     $hasCover = false;
-    $q = $conexion->query("SELECT COUNT(*) c FROM ind_imagenes WHERE producto_id={$pid} AND is_primary=1");
-    if ($q && $q->num_rows) $hasCover = ((int)$q->fetch_assoc()['c'] > 0);
+    if ($q = $conexion->query("SELECT COUNT(*) c FROM ind_imagenes WHERE producto_id={$pid} AND is_primary=1")) {
+      if ($q->num_rows) $hasCover = ((int)$q->fetch_assoc()['c'] > 0);
+    }
 
     $subidas = 0;
+
     foreach ($_FILES['fotos']['name'] as $i => $name) {
-      if (($_FILES['fotos']['error'][$i] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) continue;
-      if (!is_uploaded_file($_FILES['fotos']['tmp_name'][$i])) continue;
+      $efile  = $_FILES['fotos'];
+      $ferr   = (int)($efile['error'][$i] ?? UPLOAD_ERR_NO_FILE);
+      $tmp    = (string)($efile['tmp_name'][$i] ?? '');
+      $fname  = (string)($efile['name'][$i] ?? '');
 
-      $tmpPath = $_FILES['fotos']['tmp_name'][$i];
-      $mime    = function_exists('mime_content_type') ? mime_content_type($tmpPath) : 'application/octet-stream';
+      if ($ferr !== UPLOAD_ERR_OK) continue;
+      if (!is_uploaded_file($tmp)) continue;
 
+      // Optional: filtrar tipos básicos de imagen (no rompe si falta mime_content_type)
+      $mime = function_exists('mime_content_type') ? (mime_content_type($tmp) ?: 'application/octet-stream') : 'application/octet-stream';
+      if (strpos($mime, 'image/') !== 0) { $err = 'Archivo no es imagen: '.$fname; break; }
+
+      // Endpoint y firma
       $cloudUrl  = 'https://api.cloudinary.com/v1_1/'.rawurlencode(CLOUD_NAME).'/image/upload';
       $timestamp = time();
 
-      // Firma correcta (NO incluye api_key)
-      $signParams = ['folder' => CLOUD_FOLDER, 'timestamp' => (string)$timestamp];
-      ksort($signParams);
+      // Construir parámetros a firmar (orden alfabético). Si CLOUD_FOLDER está vacío, no lo mandamos ni firmamos.
+      $params_to_sign = ['timestamp' => (string)$timestamp];
+      $folder = (defined('CLOUD_FOLDER') ? trim((string)CLOUD_FOLDER) : '');
+      if ($folder !== '') { $params_to_sign['folder'] = $folder; }
+      ksort($params_to_sign);
+
       $pairs = [];
-      foreach ($signParams as $k=>$v) { if ($v !== '' && $v !== null) $pairs[] = $k.'='.$v; }
+      foreach ($params_to_sign as $k=>$v) { if ($v !== '' && $v !== null) $pairs[] = $k.'='.$v; }
       $signature = sha1(implode('&', $pairs) . CLOUD_API_SECRET);
 
+      // POST fields
       $postFields = [
-        'file'      => new CURLFile($tmpPath, $mime, $name),
+        'file'      => new CURLFile($tmp, $mime, $name),
         'api_key'   => CLOUD_API_KEY,
         'timestamp' => $timestamp,
-        'folder'    => CLOUD_FOLDER,
         'signature' => $signature,
       ];
+      if ($folder !== '') { $postFields['folder'] = $folder; }
 
+      // cURL
       $ch = curl_init($cloudUrl);
       curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_POST           => true,
         CURLOPT_POSTFIELDS     => $postFields,
+        CURLOPT_CONNECTTIMEOUT => 20,
+        CURLOPT_TIMEOUT        => 120,
+        // CURLOPT_HTTPHEADER     => ['Expect:'], // opcional, evita 100-continue en algunos hosts
       ]);
+
       $resp = curl_exec($ch);
-      if ($resp === false) { $err = 'Error cURL al subir a Cloudinary: '.curl_error($ch); curl_close($ch); break; }
-      $http = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+      if ($resp === false) {
+        $err = 'Error cURL al subir a Cloudinary: '.curl_error($ch);
+        curl_close($ch);
+        break;
+      }
+
+      $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
       curl_close($ch);
-      if ($http >= 400) { $err = 'Cloudinary respondió HTTP '.$http.'.'; break; }
 
+      // Parsear JSON (éxito o error detallado)
       $j = json_decode($resp, true);
-      $url = $j['secure_url'] ?? ($j['url'] ?? '');
-      if (!$url) { $err = 'No se obtuvo URL de la imagen subida.'; break; }
+      if ($http >= 400) {
+        $msg = $j['error']['message'] ?? ('HTTP '.$http);
+        // Mensaje claro en casos típicos (límite de environments, etc.)
+        $err = 'Cloudinary rechazó la subida: '.$msg;
+        break;
+      }
 
+      $url = (string)($j['secure_url'] ?? $j['url'] ?? '');
+      if ($url === '') {
+        $err = 'No se obtuvo URL de la imagen subida.';
+        break;
+      }
+
+      // Insertar en BD
       $is_primary = ($hasCover ? 0 : ($subidas === 0 ? 1 : 0));
       $st = $conexion->prepare("INSERT INTO ind_imagenes (producto_id, url, is_primary) VALUES (?,?,?)");
       $st->bind_param('isi', $pid, $url, $is_primary);
       $st->execute();
+
       $subidas++;
     }
 
