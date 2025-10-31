@@ -24,10 +24,28 @@ if (!function_exists('url_app')) {
     return '/app/' . $rel;                // siempre absoluto desde /app
   }
 }
+
+/* ✅ URL ABSOLUTA (https://host/...) para que el QR funcione fuera del sitio */
+function abs_root_url(string $path=''): string {
+  $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+  $host   = $_SERVER['HTTP_HOST'] ?? 'localhost';
+  return $scheme.'://'.$host.'/'.ltrim($path,'/');
+}
+function abs_app_url(string $rel=''): string {
+  return abs_root_url('app/'.ltrim($rel,'/'));
+}
+
+/* ✅ Formato $ 0.000,00 */
 function n2($v){ return number_format((float)$v, 2, ',', '.'); }
-function qr_url(string $data, int $size=320): string {
-  $chl = rawurlencode($data);
-  return "https://chart.googleapis.com/chart?cht=qr&chs={$size}x{$size}&chld=L|0&chl={$chl}";
+
+/* ✅ <img> QR con fallback (Google → qrserver) */
+function qr_img(string $data, int $size=150): string {
+  $enc = rawurlencode($data);
+  $u1  = "https://chart.googleapis.com/chart?cht=qr&chs={$size}x{$size}&chld=L|0&chl={$enc}";
+  $u2  = "https://api.qrserver.com/v1/create-qr-code/?size={$size}x{$size}&data={$enc}";
+  return '<img src="'.$u1.'" width="'.$size.'" height="'.$size.'" alt="QR" '.
+         'style="border-radius:8px;border:1px solid #ddd;margin:.35rem 0" '.
+         'onerror="if(this.dataset.alt)return;this.dataset.alt=1;this.src=\''.$u2.'\';">';
 }
 
 /* ===== Estado BD ===== */
@@ -330,13 +348,14 @@ if ($db_ok) {
             <?php endif; ?>
 
             <div class="row" style="gap:.5rem;margin-top:.6rem">
-              <a class="btn" href="<?= h(url_app('public/imagenes_producto.php').'?pid='.$pid) ?>" target="_blank">🖼️ Gestionar imágenes</a>
+              <!-- Gestionar imágenes: va a /public (no dentro de /app) -->
+              <a class="btn" href="<?= h(abs_root_url('public/imagenes_producto.php?pid='.$pid)) ?>" target="_blank">🖼️ Gestionar imágenes</a>
               <form method="post" onsubmit="return confirm('¿Alternar activo/inactivo?');">
                 <input type="hidden" name="action" value="upd_product">
                 <input type="hidden" name="producto_id" value="<?= $pid ?>">
                 <input type="hidden" name="titulo" value="<?= h($p['titulo']) ?>">
-                <input type="hidden" name="precio" value="<?= h((string)$p['precio']) ?>">
-                <input type="hidden" name="categoria" value="<?= h($p['categoria']) ?>">
+                <input type="hidden" name="precio" value="<?= h((string)($p['precio'] ?? '0')) ?>">
+                <input type="hidden" name="categoria" value="<?= h($p['categoria'] ?? '') ?>">
                 <input type="hidden" name="descripcion" value="<?= h($p['descripcion'] ?? '') ?>">
                 <input type="hidden" name="activo" value="<?= ((int)$p['activo']===1)?'0':'1' ?>">
                 <button class="btn"><?= ((int)$p['activo']===1 ? '⛔ Desactivar' : '✅ Activar') ?></button>
@@ -351,15 +370,16 @@ if ($db_ok) {
                   $vid = (int)$v['id'];
                   $lb = trim(($v['talle'] ?? '') . ((($v['talle'] ?? '') && ($v['color'] ?? '')) ? ' / ' : '') . ($v['color'] ?? ''));
                   if ($lb==='') $lb='Única';
-                  $sellUrl = url_app('pages/venta_qr.php').'?pid='.$pid.'&vid='.$vid.'&sell=1';
+                  /* URL ABSOLUTA hacia las páginas internas */
+                  $sellUrl = abs_app_url('pages/venta_qr.php').'?pid='.$pid.'&vid='.$vid.'&sell=1';
                 ?>
                   <div style="border:1px solid #ddd;border-radius:10px;padding:.5rem">
                     <div style="font-weight:600"><?= h($lb) ?></div>
                     <?php if (!empty($v['medidas'])): ?><div class="muted">Medidas: <?= h($v['medidas']) ?></div><?php endif; ?>
-                    <img src="<?= qr_url($sellUrl, 150) ?>" alt="QR" width="150" height="150" style="border-radius:8px;border:1px solid #ddd;margin:.35rem 0">
+                    <?= qr_img($sellUrl, 150) ?>
                     <div class="row">
-                      <a class="btn" href="<?= url_app('pages/etiqueta_var.php').'?pid='.$pid.'&vid='.$vid ?>" target="_blank">Etiqueta</a>
-                      <a class="btn" href="<?= $sellUrl ?>" target="_blank">Vender 1</a>
+                      <a class="btn" href="<?= h(abs_app_url('pages/etiqueta_var.php').'?pid='.$pid.'&vid='.$vid) ?>" target="_blank">Etiqueta</a>
+                      <a class="btn" href="<?= h($sellUrl) ?>" target="_blank">Vender 1</a>
                     </div>
                   </div>
                 <?php endforeach; ?>
