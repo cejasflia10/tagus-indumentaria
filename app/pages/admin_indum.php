@@ -17,22 +17,39 @@ require_once dirname(__DIR__, 2) . '/public/partials/menu.php';
 if (!function_exists('h')) {
   function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
 }
+
+/* Base path del proyecto (parte ANTES de /public o /app) */
+function base_path_from_script(): string {
+  $sn = str_replace('\\','/', (string)($_SERVER['SCRIPT_NAME'] ?? '/'));
+  if (preg_match('#^(.*?)/(?:public|app)(?:/.*)?$#', $sn, $m)) {
+    return rtrim($m[1], '/'); // '' si está en raíz
+  }
+  return '';
+}
+
+/* URL relativa dentro del proyecto */
 if (!function_exists('url')) {
   function url(string $path=''): string {
-    $scriptDir = rtrim(str_replace('\\','/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
-    // base = raíz del proyecto (quita /public o /app de la URL actual)
-    $base = preg_replace('#/(public|app)(/.*)?$#','',$scriptDir);
-    $base = $base === '/' ? '' : $base;
-    return rtrim($base,'/') . '/' . ltrim($path,'/');
+    $base = base_path_from_script();            // '' o '/algo'
+    return ($base === '' ? '' : $base) . '/' . ltrim($path,'/');
   }
 }
-/* ✅ Formato $ 0.000,00 (arregla el "Call to undefined function n2()") */
+
+/* URL ABSOLUTA (con esquema y host) */
+function abs_url(string $path=''): string {
+  $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+  $host   = (string)($_SERVER['HTTP_HOST'] ?? 'localhost');
+  return $scheme.'://'.$host . url($path);
+}
+
+/* ✅ Formato $ 0.000,00 */
 function n2($v){ return number_format((float)$v, 2, ',', '.'); }
 
-/* URL de imagen QR (Google Chart) */
+/* ✅ URL de imagen QR (QRServer, estable) */
 function qr_url(string $data, int $size=320): string {
+  $s = max(80, min(1000, $size));
   $chl = rawurlencode($data);
-  return "https://chart.googleapis.com/chart?cht=qr&chs={$size}x{$size}&chld=L|0&chl={$chl}";
+  return "https://api.qrserver.com/v1/create-qr-code/?size={$s}x{$s}&data={$chl}";
 }
 
 /* ===== Estado BD (no cortar render) ===== */
@@ -346,7 +363,7 @@ if ($db_ok) {
             <?php endif; ?>
 
             <div class="row" style="gap:.5rem;margin-top:.6rem">
-              <a class="btn" href="<?= h(url('public/imagenes_producto.php').'?pid='.$pid) ?>" target="_blank">🖼️ Gestionar imágenes</a>
+              <a class="btn" href="<?= h(abs_url('public/imagenes_producto.php').'?pid='.$pid) ?>" target="_blank">🖼️ Gestionar imágenes</a>
               <form method="post" onsubmit="return confirm('¿Alternar activo/inactivo?');">
                 <input type="hidden" name="action" value="upd_product">
                 <input type="hidden" name="producto_id" value="<?= $pid ?>">
@@ -368,14 +385,14 @@ if ($db_ok) {
                   $lb = trim(($v['talle'] ?? '') . ((($v['talle'] ?? '') && ($v['color'] ?? '')) ? ' / ' : '') . ($v['color'] ?? ''));
                   if ($lb==='') $lb='Única';
                   /* URL absoluta hacia las páginas internas */
-                  $sellUrl = url('app/pages/venta_qr.php').'?pid='.$pid.'&vid='.$vid.'&sell=1';
+                  $sellUrl = abs_url('app/pages/venta_qr.php').'?pid='.$pid.'&vid='.$vid.'&sell=1';
                 ?>
                   <div style="border:1px solid #ddd;border-radius:10px;padding:.5rem">
                     <div style="font-weight:600"><?= h($lb) ?></div>
                     <?php if (!empty($v['medidas'])): ?><div class="muted">Medidas: <?= h($v['medidas']) ?></div><?php endif; ?>
                     <img src="<?= qr_url($sellUrl, 150) ?>" alt="QR" width="150" height="150" style="border-radius:8px;border:1px solid #ddd;margin:.35rem 0">
                     <div class="row">
-                      <a class="btn" href="<?= url('app/pages/etiqueta_var.php').'?pid='.$pid.'&vid='.$vid ?>" target="_blank">Etiqueta</a>
+                      <a class="btn" href="<?= abs_url('app/pages/etiqueta_var.php').'?pid='.$pid.'&vid='.$vid ?>" target="_blank">Etiqueta</a>
                       <a class="btn" href="<?= $sellUrl ?>" target="_blank">Vender 1</a>
                     </div>
                   </div>
