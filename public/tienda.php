@@ -1,7 +1,7 @@
 <?php
-// public/tienda.php — Catálogo público con variantes + galería + lightbox
-// FIX: la miniatura de la grilla ahora usa transformación de Cloudinary
-//      y fuerza JPG (funciona aunque el original sea .HEIC, PNG, etc.)
+// public/tienda.php — Catálogo público + galería + lightbox
+// ✔ Miniatura: fuerza JPG + cover (compat total)
+// ✔ Modal: usa recorte grande
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) session_start();
 
@@ -10,32 +10,27 @@ if (!isset($conexion) || !($conexion instanceof mysqli)) { http_response_code(50
 @$conexion->set_charset('utf8mb4');
 
 /* ==== Helpers ==== */
-if (!function_exists('h')) {
-  function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
+if (!function_exists('h')) { function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); } }
+
+/** Transform general para Cloudinary */
+function cld_transform(?string $url, string $t): string {
+  $u = trim((string)($url ?? ''));
+  if ($u === '') return '';
+  if (strpos($u,'res.cloudinary.com') !== false && strpos($u,'/upload/') !== false) {
+    [$a,$b] = explode('/upload/', $u, 2);
+    return $a.'/upload/'.$t.'/'.ltrim($b,'/');
+  }
+  return $u;
 }
 
-/* Transformaciones Cloudinary */
-if (!function_exists('cld_tx')) {
-  function cld_tx(?string $url, string $tx): string {
-    $u = trim((string)($url ?? '')); if ($u==='') return '';
-    if (strpos($u,'res.cloudinary.com')!==false && strpos($u,'/upload/')!==false){
-      [$a,$b] = explode('/upload/', $u, 2);
-      return $a.'/upload/'.$tx.'/'.ltrim($b,'/');
-    }
-    return $u;
-  }
+/** Miniatura para grilla (fuerza JPG) */
+function grid_src(?string $url, int $w=520, int $h=624): string {
+  return cld_transform($url, 'f_jpg,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h);
 }
-// Grande para el modal (recorte 5:6). f_jpg asegura compatibilidad universal
-if (!function_exists('img_url')) {
-  function img_url(?string $url, int $w=900, int $h=1100): string {
-    return cld_tx($url, 'f_jpg,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h);
-  }
-}
-// Miniatura para grilla (cuadrada) y thumbs del modal — también fuerza JPG
-if (!function_exists('thumb_url')) {
-  function thumb_url(?string $url, int $size=520): string {
-    return cld_tx($url, 'f_jpg,q_auto,c_fill,g_auto,w_'.$size.',h_'.$size);
-  }
+
+/** Imagen grande para modal */
+function modal_src(?string $url, int $w=900, int $h=1100): string {
+  return cld_transform($url, 'f_auto,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h);
 }
 
 /* ===== Endpoint modal JSON (ANTES de imprimir HTML) ===== */
@@ -51,8 +46,8 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   $ri = $conexion->query("SELECT url FROM ind_imagenes WHERE producto_id={$id} ORDER BY is_primary DESC, id ASC");
   if ($ri && $ri->num_rows) {
     while($r = $ri->fetch_assoc()){
-      $full = img_url($r['url'], 900, 1100);     // grande
-      $mini = thumb_url($r['url'], 160);         // thumb
+      $full = modal_src($r['url'], 900, 1100);   // grande
+      $mini = cld_transform($r['url'], 'f_jpg,q_auto,c_fill,g_auto,w_160,h_160'); // thumb modal
       $imgs[] = ['full'=>$full ?: '', 'mini'=>$mini ?: $full];
     }
   }
@@ -172,9 +167,8 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
         <?php if ($prods && $prods->num_rows): while($p = $prods->fetch_assoc()):
           $pid   = (int)$p['id'];
           $foto  = trim((string)($p['foto_url'] ?? ''));
-          // 👉 MINIATURA de grilla: siempre transformación (f_jpg + recorte)
-          $thumb0 = $foto !== '' ? thumb_url($foto, 520) : '';
-          $thumb  = $thumb0 !== '' ? $thumb0 : ($noimgPath ?: $NOIMG_DATA);
+          // 🔧 Miniatura: Cloudinary -> fuerza JPG, cover, tamaño fijo
+          $thumb = $foto !== '' ? grid_src($foto, 520, 624) : ($noimgPath ?: $NOIMG_DATA);
           $talles  = trim((string)($p['talles'] ?? ''));
           $colores = trim((string)($p['colores'] ?? ''));
         ?>
@@ -184,7 +178,7 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
               <img
                 src="<?=h($thumb)?>"
                 alt="<?=h($p['titulo'])?>"
-                decoding="async" loading="lazy"
+                decoding="async" loading="lazy" referrerpolicy="no-referrer"
                 data-fallback="<?=h($NOIMG_DATA)?>"
                 onerror="this.onerror=null;this.src=this.dataset.fallback;">
             </div>
