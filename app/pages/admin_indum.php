@@ -40,10 +40,13 @@ if (!function_exists('abs_url')) {
     return $proto . $host . rel_url($path);
   }
 }
-function n2($v){ return number_format((float)$v, 2, ',', '.'); }
 function qr_url(string $data, int $size=320): string {
+  // Generador robusto (api.qrserver.com)
+  // El <img> lo descarga el navegador del usuario, no el servidor.
+  $w = max(80, min(1000, $size));
+  $h = $w;
   $chl = rawurlencode($data);
-  return "https://chart.googleapis.com/chart?cht=qr&chs={$size}x{$size}&chld=L|0&chl={$chl}";
+  return "https://api.qrserver.com/v1/create-qr-code/?size={$w}x{$h}&data={$chl}";
 }
 
 /* ===== Estado BD (no cortar render) ===== */

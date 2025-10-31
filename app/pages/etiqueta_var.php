@@ -7,7 +7,7 @@ declare(strict_types=1);
 ini_set('display_errors','1');
 error_reporting(E_ALL);
 
-// ✅ rutas corregidas
+// rutas correctas
 require_once __DIR__ . '/../config.php';
 require_once __DIR__ . '/../helpers.php';
 require_once __DIR__ . '/../../public/partials/menu.php';
@@ -16,8 +16,10 @@ require_once __DIR__ . '/../../public/partials/menu.php';
 
 function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE,'UTF-8'); }
 function qr_url(string $data, int $size=200): string {
+  $w = max(80, min(1000, $size));
+  $h = $w;
   $chl = rawurlencode($data);
-  return "https://chart.googleapis.com/chart?cht=qr&chs={$size}x{$size}&chld=L|0&chl={$chl}";
+  return "https://api.qrserver.com/v1/create-qr-code/?size={$w}x{$h}&data={$chl}";
 }
 
 $pid = (int)($_GET['pid'] ?? 0);
@@ -37,7 +39,8 @@ $res = $q->get_result();
 if (!$res || !$res->num_rows) exit('❌ Variante no encontrada.');
 $v = $res->fetch_assoc();
 
-$ventaUrl = "https://{$_SERVER['HTTP_HOST']}/app/pages/venta_qr.php?pid={$pid}&vid={$vid}&sell=1";
+$host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+$ventaUrl = "https://{$host}/app/pages/venta_qr.php?pid={$pid}&vid={$vid}&sell=1";
 ?>
 <main style="padding:1rem;text-align:center">
   <h2><?= h($v['titulo']) ?></h2>
