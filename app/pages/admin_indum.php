@@ -17,12 +17,27 @@ require_once dirname(__DIR__, 2) . '/public/partials/menu.php';
 if (!function_exists('h')) {
   function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
 }
-if (!function_exists('url')) {
-  function url(string $path=''): string {
-    $scriptDir = rtrim(str_replace('\\','/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
-    $base = preg_replace('#/(public|app)(/.*)?$#','',$scriptDir);
-    $base = $base === '/' ? '' : $base;
-    return rtrim($base,'/') . '/' . ltrim($path,'/');
+
+/* ---- Helpers de rutas: relativas y absolutas, sin /app/app ---- */
+if (!function_exists('base_path')) {
+  function base_path(): string {
+    $scriptDir = str_replace('\\','/', dirname($_SERVER['SCRIPT_NAME'] ?? '/'));
+    $scriptDir = rtrim($scriptDir, '/');
+    // si estamos en /app/pages ó /public/xxx => volver a la raíz del proyecto
+    $root = preg_replace('#/(?:app|public)(?:/.*)?$#', '', $scriptDir);
+    return $root === '' ? '/' : $root . '/';
+  }
+}
+if (!function_exists('rel_url')) {
+  function rel_url(string $path=''): string {
+    return rtrim(base_path(), '/') . '/' . ltrim($path, '/');
+  }
+}
+if (!function_exists('abs_url')) {
+  function abs_url(string $path=''): string {
+    $proto = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS']!=='off') ? 'https://' : 'http://';
+    $host  = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    return $proto . $host . rel_url($path);
   }
 }
 function n2($v){ return number_format((float)$v, 2, ',', '.'); }
@@ -43,11 +58,11 @@ function cloud_upload_localfile(string $filepath, string $public_id): ?string {
   $timestamp = time();
   $folder = defined('CLOUD_FOLDER') ? CLOUD_FOLDER : 'tagus_indumentaria';
 
-  $params = ['timestamp'=>$timestamp,'public_id'=>$public_id,'folder'=>$folder];
+  $params = ['folder'=>$folder,'public_id'=>$public_id,'timestamp'=>$timestamp];
   ksort($params);
-  $to_sign = '';
-  foreach ($params as $k => $v) $to_sign .= "{$k}={$v}&";
-  $signature = sha1(rtrim($to_sign,'&') . CLOUD_API_SECRET);
+  $pairs = [];
+  foreach ($params as $k=>$v) { $pairs[] = "{$k}={$v}"; }
+  $signature = sha1(implode('&',$pairs) . CLOUD_API_SECRET);
 
   $post = [
     'file'       => new CURLFile($filepath),
@@ -333,7 +348,7 @@ if ($db_ok) {
             <?php endif; ?>
 
             <div class="row" style="gap:.5rem;margin-top:.6rem">
-              <a class="btn" href="<?= h(url('public/imagenes_producto.php').'?pid='.$pid) ?>" target="_blank">🖼️ Gestionar imágenes</a>
+              <a class="btn" href="<?= h(rel_url('public/imagenes_producto.php').'?pid='.$pid) ?>" target="_blank">🖼️ Gestionar imágenes</a>
               <form method="post" onsubmit="return confirm('¿Alternar activo/inactivo?');">
                 <input type="hidden" name="action" value="upd_product">
                 <input type="hidden" name="producto_id" value="<?= $pid ?>">
@@ -354,15 +369,17 @@ if ($db_ok) {
                   $vid = (int)$v['id'];
                   $lb = trim(($v['talle'] ?? '') . ((($v['talle'] ?? '') && ($v['color'] ?? '')) ? ' / ' : '') . ($v['color'] ?? ''));
                   if ($lb==='') $lb='Única';
-                  $sellUrl = url('app/pages/venta_qr.php').'?pid='.$pid.'&vid='.$vid.'&sell=1';
+                  // ✅ Absolutas para QR y acciones
+                  $sellUrl = abs_url('app/pages/venta_qr.php').'?pid='.$pid.'&vid='.$vid.'&sell=1';
+                  $tagUrl  = abs_url('app/pages/etiqueta_var.php').'?pid='.$pid.'&vid='.$vid;
                 ?>
                   <div style="border:1px solid #ddd;border-radius:10px;padding:.5rem">
                     <div style="font-weight:600"><?= h($lb) ?></div>
                     <?php if (!empty($v['medidas'])): ?><div class="muted">Medidas: <?= h($v['medidas']) ?></div><?php endif; ?>
                     <img src="<?= qr_url($sellUrl, 120) ?>" alt="QR" width="120" height="120" style="border-radius:8px;border:1px solid #ddd;margin:.35rem 0">
                     <div class="row">
-                      <a class="btn" href="<?= url('app/pages/etiqueta_var.php').'?pid='.$pid.'&vid='.$vid ?>" target="_blank">Etiqueta</a>
-                      <a class="btn" href="<?= $sellUrl ?>" target="_blank">Vender 1</a>
+                      <a class="btn" href="<?= h($tagUrl) ?>" target="_blank">Etiqueta</a>
+                      <a class="btn" href="<?= h($sellUrl) ?>" target="_blank">Vender 1</a>
                     </div>
                   </div>
                 <?php endforeach; ?>
