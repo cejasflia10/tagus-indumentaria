@@ -1,7 +1,7 @@
 <?php
-// public/tienda.php — Catálogo público + galería + lightbox
-// ✔ Miniatura: fuerza JPG + cover (compat total)
-// ✔ Modal: usa recorte grande
+// public/tienda.php — Catálogo + galería + lightbox
+// FIX: miniatura robusta (intenta cld->JPG y cae a original si no carga)
+// Debug: ?debug=1 muestra URLs usadas en cada tarjeta
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) session_start();
 
@@ -12,7 +12,9 @@ if (!isset($conexion) || !($conexion instanceof mysqli)) { http_response_code(50
 /* ==== Helpers ==== */
 if (!function_exists('h')) { function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); } }
 
-/** Transform general para Cloudinary */
+$DEBUG = isset($_GET['debug']) && $_GET['debug']=='1';
+
+/** Transform genérica (solo para URLs de Cloudinary con /upload/) */
 function cld_transform(?string $url, string $t): string {
   $u = trim((string)($url ?? ''));
   if ($u === '') return '';
@@ -23,17 +25,18 @@ function cld_transform(?string $url, string $t): string {
   return $u;
 }
 
-/** Miniatura para grilla (fuerza JPG) */
+/** Mini para grilla: fuerza JPG + cover */
 function grid_src(?string $url, int $w=520, int $h=624): string {
+  // f_jpg => compat universal; g_auto => centra mejor
   return cld_transform($url, 'f_jpg,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h);
 }
 
-/** Imagen grande para modal */
+/** Grande para modal */
 function modal_src(?string $url, int $w=900, int $h=1100): string {
   return cld_transform($url, 'f_auto,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h);
 }
 
-/* ===== Endpoint modal JSON (ANTES de imprimir HTML) ===== */
+/* ===== Endpoint modal JSON (ANTES de HTML) ===== */
 if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   header('Content-Type: application/json; charset=utf-8');
   $id = (int)$_GET['id'];
@@ -46,8 +49,8 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   $ri = $conexion->query("SELECT url FROM ind_imagenes WHERE producto_id={$id} ORDER BY is_primary DESC, id ASC");
   if ($ri && $ri->num_rows) {
     while($r = $ri->fetch_assoc()){
-      $full = modal_src($r['url'], 900, 1100);   // grande
-      $mini = cld_transform($r['url'], 'f_jpg,q_auto,c_fill,g_auto,w_160,h_160'); // thumb modal
+      $full = modal_src($r['url'], 900, 1100);
+      $mini = cld_transform($r['url'], 'f_jpg,q_auto,c_fill,g_auto,w_160,h_160');
       $imgs[] = ['full'=>$full ?: '', 'mini'=>$mini ?: $full];
     }
   }
@@ -66,7 +69,7 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   exit;
 }
 
-/* ===== A PARTIR DE ACÁ PODEMOS IMPRIMIR HTML ===== */
+/* ===== HTML ===== */
 require_once __DIR__ . '/partials/public_header.php';
 
 /* ===== Búsqueda ===== */
@@ -93,7 +96,6 @@ if ($BASE === '') $BASE = '/';
 $hrefMisPedidos = rtrim($BASE, '/').'/public/mis_pedidos.php';
 $noimgPath      = rtrim($BASE, '/').'/public/assets/noimg.png';
 
-/* Fallback SVG inline por si no existe noimg.png */
 $NOIMG_DATA = 'data:image/svg+xml;utf8,' . rawurlencode(
   '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="720" viewBox="0 0 600 720">'
  .'<rect width="100%" height="100%" fill="#f3f4f6"/><g fill="#9ca3af" font-family="Arial,Helvetica,sans-serif">'
@@ -114,41 +116,26 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
   .prod-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,.08)}
   .prod-body{padding:8px 10px 10px}
   .ratio-box{position:relative;width:100%;padding-top:120%;overflow:hidden;border-radius:14px 14px 0 0;background:#f6f7f6}
-  .ratio-box>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .ratio-box>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
   .prod-title{font-weight:700;font-size:.95rem;line-height:1.1;margin-top:6px;min-height:2.2em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .prod-price{color:#6b7280;font-size:.9rem;margin-top:2px}
   .pill{display:inline-block;font-size:.72rem;padding:.15rem .45rem;border-radius:999px;background:#f3f4f6;color:#374151}
-
-  .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.85);z-index:2147483647}
-  .modal.open{display:flex}
-  .modal-content{width:min(980px,95vw);max-height:92vh;background:#fff;border-radius:16px;overflow:hidden;display:grid;grid-template-rows:auto 1fr}
-  .modal-header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #eee}
-  .modal-title{font-weight:700}
-  .modal-close{cursor:pointer;font-size:20px;background:#f3f4f6;border:none;border-radius:8px;padding:4px 10px}
-  .modal-body{padding:12px;overflow:auto}
-  .m-gallery{display:grid;grid-template-columns:1.2fr .8fr;gap:12px}
-  @media(max-width:780px){.m-gallery{grid-template-columns:1fr}}
-  .g-main{border-radius:12px;overflow:hidden;background:#111;display:flex;align-items:center;justify-content:center}
-  .g-main img{max-width:100%;max-height:min(74vh,640px);object-fit:contain;cursor:zoom-in}
-  .g-thumbs{display:flex;gap:8px;flex-wrap:wrap;min-height:80px}
-  .g-thumbs img{width:74px;height:74px;object-fit:cover;border-radius:10px;cursor:pointer;border:2px solid transparent;opacity:.95}
-  .g-thumbs img.active{border-color:#0d6efd;opacity:1}
-
-  .lb{position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;justify-content:center;z-index:2147483648}
-  .lb.open{display:flex}
-  .lb img{max-width:96vw;max-height:92vh;border-radius:12px}
-  .lb .close{position:absolute;top:14px;right:14px;font-size:26px;color:#fff;cursor:pointer}
+  <?php if($DEBUG): ?>
+  .dbg{font-size:.75rem;color:#6b7280;word-break:break-all;margin-top:6px}
+  .dbg a{color:#374151}
+  <?php endif; ?>
 </style>
 
 <div class="container">
   <div class="card">
-    <div class="card-header">Tienda</div>
+    <div class="card-header">Tienda <?= $DEBUG ? '(modo diagnóstico)' : '' ?></div>
     <div class="card-body">
       <div class="sharebar" style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" type="button"
                 onclick="shareNative('<?=h($tiendaUrl)?>','TAGUS — Tienda','<?=h($shareTxt)?>')">🔗 Compartir</button>
         <a class="btn btn-muted" href="https://wa.me/?text=<?=urlencode($shareTxt.' '.$tiendaUrl)?>" target="_blank" rel="noopener">🟢 WhatsApp</a>
         <button class="btn btn-muted" type="button" onclick="copyLink('<?=h($tiendaUrl)?>', this)">📋 Copiar link</button>
+        <?php if(!$DEBUG): ?><a class="btn btn-muted" href="?debug=1">Diagnóstico</a><?php else: ?><a class="btn btn-muted" href="?">Salir diagnóstico</a><?php endif; ?>
       </div>
 
       <form method="get" class="row cols-2 mt-3">
@@ -165,10 +152,10 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
 
       <div class="catalog-grid">
         <?php if ($prods && $prods->num_rows): while($p = $prods->fetch_assoc()):
-          $pid   = (int)$p['id'];
-          $foto  = trim((string)($p['foto_url'] ?? ''));
-          // 🔧 Miniatura: Cloudinary -> fuerza JPG, cover, tamaño fijo
-          $thumb = $foto !== '' ? grid_src($foto, 520, 624) : ($noimgPath ?: $NOIMG_DATA);
+          $pid    = (int)$p['id'];
+          $orig   = trim((string)($p['foto_url'] ?? ''));
+          $thumbC = $orig !== '' ? grid_src($orig, 520, 624) : '';
+          $thumb  = $thumbC !== '' ? $thumbC : ($orig !== '' ? $orig : ($noimgPath ?: $NOIMG_DATA));
           $talles  = trim((string)($p['talles'] ?? ''));
           $colores = trim((string)($p['colores'] ?? ''));
         ?>
@@ -177,10 +164,11 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
             <div class="ratio-box">
               <img
                 src="<?=h($thumb)?>"
+                data-src-cld="<?=h($thumbC)?>"
+                data-src-orig="<?=h($orig)?>"
                 alt="<?=h($p['titulo'])?>"
-                decoding="async" loading="lazy" referrerpolicy="no-referrer"
-                data-fallback="<?=h($NOIMG_DATA)?>"
-                onerror="this.onerror=null;this.src=this.dataset.fallback;">
+                decoding="async"
+                onerror="fallbackMini(this)">
             </div>
           </button>
           <div class="prod-body">
@@ -192,6 +180,14 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
               <button class="btn btn-muted" type="button" onclick="openModalById(<?= $pid ?>)">Ver fotos</button>
               <a class="btn btn-primary" href="ver_producto.php?id=<?=$pid?>">Comprar</a>
             </div>
+
+            <?php if($DEBUG): ?>
+              <div class="dbg">
+                <div><b>CLD:</b> <a target="_blank" href="<?=h($thumbC)?>"><?=h($thumbC)?></a></div>
+                <div><b>ORIG:</b> <a target="_blank" href="<?=h($orig)?>"><?=h($orig)?></a></div>
+                <div><b>USADO:</b> <a target="_blank" href="<?=h($thumb)?>"><?=h($thumb)?></a></div>
+              </div>
+            <?php endif; ?>
           </div>
         </div>
         <?php endwhile; else: ?>
@@ -243,6 +239,15 @@ function copyLink(url, el){
   }
 }
 
+// Si falla la miniatura transformada, cae a la original automáticamente.
+function fallbackMini(img){
+  const orig = img.getAttribute('data-src-orig') || '';
+  if (orig && img.src !== orig) {
+    img.onerror = null;        // prevenimos loop
+    img.src = orig;            // usar original que ya funciona en el modal
+  }
+}
+
 (function(){
   const modal   = document.getElementById('prodModal');
   const mTitle  = document.getElementById('mTitle');
@@ -269,7 +274,7 @@ function copyLink(url, el){
   lb.addEventListener('click', (e)=>{ if(e.target===lb || e.target===lbClose) closeLb(); });
   lbClose.addEventListener('click', closeLb);
 
-  document.getElementById('mMain').addEventListener('click', ()=>{ if (mMain.src) openLb(mMain.src); });
+  mMain.addEventListener('click', ()=>{ if (mMain.src) openLb(mMain.src); });
 
   window.openModalById = async function(id){
     try{
