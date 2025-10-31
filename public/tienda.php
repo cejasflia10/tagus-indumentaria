@@ -1,8 +1,7 @@
 <?php
 // public/tienda.php — Catálogo público con variantes + galería + lightbox
-// ✔ Miniatura en grilla usa la URL ORIGINAL (sin transformaciones)
-// ✔ Modal usa transform (recorte) y se ve grande
-// ✔ Fallback SVG si falla cualquier imagen
+// FIX: la miniatura de la grilla ahora usa transformación de Cloudinary
+//      y fuerza JPG (funciona aunque el original sea .HEIC, PNG, etc.)
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) session_start();
 
@@ -14,26 +13,28 @@ if (!isset($conexion) || !($conexion instanceof mysqli)) { http_response_code(50
 if (!function_exists('h')) {
   function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
 }
-// Transform para imagen grande (modal)
-if (!function_exists('img_url')) {
-  function img_url(?string $url, int $w=900, int $h=1100): string {
+
+/* Transformaciones Cloudinary */
+if (!function_exists('cld_tx')) {
+  function cld_tx(?string $url, string $tx): string {
     $u = trim((string)($url ?? '')); if ($u==='') return '';
     if (strpos($u,'res.cloudinary.com')!==false && strpos($u,'/upload/')!==false){
-      [$a,$b] = explode('/upload/',$u,2);
-      return $a.'/upload/f_auto,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h.'/'.$b;
+      [$a,$b] = explode('/upload/', $u, 2);
+      return $a.'/upload/'.$tx.'/'.ltrim($b,'/');
     }
     return $u;
   }
 }
-// Mini cuadrada (si se necesita en el modal para thumbs)
+// Grande para el modal (recorte 5:6). f_jpg asegura compatibilidad universal
+if (!function_exists('img_url')) {
+  function img_url(?string $url, int $w=900, int $h=1100): string {
+    return cld_tx($url, 'f_jpg,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h);
+  }
+}
+// Miniatura para grilla (cuadrada) y thumbs del modal — también fuerza JPG
 if (!function_exists('thumb_url')) {
-  function thumb_url(?string $url, int $size=200): string {
-    $u = trim((string)($url ?? '')); if ($u==='') return '';
-    if (strpos($u,'res.cloudinary.com')!==false && strpos($u,'/upload/')!==false){
-      [$a,$b] = explode('/upload/',$u,2);
-      return $a.'/upload/f_auto,q_auto,c_fill,g_auto,w_'.$size.',h_'.$size.'/'.$b;
-    }
-    return $u;
+  function thumb_url(?string $url, int $size=520): string {
+    return cld_tx($url, 'f_jpg,q_auto,c_fill,g_auto,w_'.$size.',h_'.$size);
   }
 }
 
@@ -50,8 +51,8 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   $ri = $conexion->query("SELECT url FROM ind_imagenes WHERE producto_id={$id} ORDER BY is_primary DESC, id ASC");
   if ($ri && $ri->num_rows) {
     while($r = $ri->fetch_assoc()){
-      $full = img_url($r['url'], 900, 1100);  // grande recortada
-      $mini = thumb_url($r['url'], 160);      // mini para thumbs
+      $full = img_url($r['url'], 900, 1100);     // grande
+      $mini = thumb_url($r['url'], 160);         // thumb
       $imgs[] = ['full'=>$full ?: '', 'mini'=>$mini ?: $full];
     }
   }
@@ -171,8 +172,9 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
         <?php if ($prods && $prods->num_rows): while($p = $prods->fetch_assoc()):
           $pid   = (int)$p['id'];
           $foto  = trim((string)($p['foto_url'] ?? ''));
-          // 🔧 En la grilla usamos la URL ORIGINAL (sin transformaciones) para que no falle
-          $thumb = $foto !== '' ? $foto : ($noimgPath ?: $NOIMG_DATA);
+          // 👉 MINIATURA de grilla: siempre transformación (f_jpg + recorte)
+          $thumb0 = $foto !== '' ? thumb_url($foto, 520) : '';
+          $thumb  = $thumb0 !== '' ? $thumb0 : ($noimgPath ?: $NOIMG_DATA);
           $talles  = trim((string)($p['talles'] ?? ''));
           $colores = trim((string)($p['colores'] ?? ''));
         ?>
@@ -182,7 +184,7 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
               <img
                 src="<?=h($thumb)?>"
                 alt="<?=h($p['titulo'])?>"
-                decoding="async" loading="lazy" referrerpolicy="no-referrer"
+                decoding="async" loading="lazy"
                 data-fallback="<?=h($NOIMG_DATA)?>"
                 onerror="this.onerror=null;this.src=this.dataset.fallback;">
             </div>
