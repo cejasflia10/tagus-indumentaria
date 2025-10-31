@@ -1,5 +1,7 @@
 <?php
-// public/tienda.php — Catálogo + galería + lightbox (miniatura visible garantizada)
+// public/tienda.php — Catálogo + galería + lightbox (mini OK + ampliar y ver todas)
+// - Miniatura: usa URL original; si es HEIC la pide como JPG (compat)
+// - Modal: todas las fotos + zoom fullscreen al tocar la grande
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) session_start();
 
@@ -10,31 +12,20 @@ if (!isset($conexion) || !($conexion instanceof mysqli)) { http_response_code(50
 /* ===== Helpers ===== */
 if (!function_exists('h')) { function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); } }
 
-/**
- * Devuelve una URL que el navegador pueda mostrar:
- * - Si es Cloudinary y la extensión es .heic / .heif -> fuerza JPG para compatibilidad.
- * - En cualquier otro caso devuelve la misma URL.
- */
+/** Mini segura: si es HEIC -> JPG en Cloudinary, sino la original */
 function safe_thumb_url(?string $url, int $w=520, int $h=624): string {
   $u = trim((string)($url ?? ''));
   if ($u === '') return '';
   $isCloud = (strpos($u, 'res.cloudinary.com') !== false && strpos($u, '/upload/') !== false);
-
-  // Detectar HEIC / HEIF (o extensión rara)
-  $ext = strtolower(parse_url($u, PHP_URL_PATH) ?? '');
-  $isHeic = (str_ends_with($ext, '.heic') || str_ends_with($ext, '.heif'));
-
+  $path = strtolower(parse_url($u, PHP_URL_PATH) ?? '');
+  $isHeic = (str_ends_with($path, '.heic') || str_ends_with($path, '.heif'));
   if ($isCloud && $isHeic) {
-    // Pedimos a Cloudinary que entregue JPG recortado a tamaño (cover)
     [$a,$b] = explode('/upload/', $u, 2);
     return $a.'/upload/f_jpg,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h.'/'.ltrim($b,'/');
   }
-
-  // Si es Cloudinary pero no HEIC, devolvemos tal cual (sin transformaciones)
   return $u;
 }
-
-/** Imagen grande (solo para el modal) — recortada cover */
+/** Transform para el modal (grande, cover) */
 function modal_src(?string $url, int $w=900, int $h=1100): string {
   $u = trim((string)($url ?? '')); if ($u==='') return '';
   if (strpos($u,'res.cloudinary.com')!==false && strpos($u,'/upload/')!==false){
@@ -44,7 +35,7 @@ function modal_src(?string $url, int $w=900, int $h=1100): string {
   return $u;
 }
 
-/* ===== Endpoint modal JSON (ANTES del HTML) ===== */
+/* ===== Endpoint modal JSON (antes de HTML) ===== */
 if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   header('Content-Type: application/json; charset=utf-8');
   $id = (int)$_GET['id'];
@@ -58,7 +49,9 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   if ($ri && $ri->num_rows) {
     while($r = $ri->fetch_assoc()){
       $full = modal_src($r['url'], 900, 1100);
-      $mini = safe_thumb_url($r['url'], 160, 160); // mini de los thumbs
+      // thumb del modal: si es HEIC la pedimos como JPG chico
+      $mini = safe_thumb_url($r['url'], 160, 160);
+      if ($mini === '') $mini = $full;
       $imgs[] = ['full'=>$full ?: '', 'mini'=>$mini ?: $full];
     }
   }
@@ -77,7 +70,7 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   exit;
 }
 
-/* ===== A PARTIR DE ACÁ: HTML ===== */
+/* ===== HTML ===== */
 require_once __DIR__ . '/partials/public_header.php';
 
 /* ===== Búsqueda ===== */
@@ -103,14 +96,12 @@ $BASE = preg_replace('#/public$#', '', $scriptDir);
 if ($BASE === '') $BASE = '/';
 $hrefMisPedidos = rtrim($BASE, '/').'/public/mis_pedidos.php';
 $noimgPath      = rtrim($BASE, '/').'/public/assets/noimg.png';
-
 $NOIMG_DATA = 'data:image/svg+xml;utf8,' . rawurlencode(
   '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="720" viewBox="0 0 600 720">'
  .'<rect width="100%" height="100%" fill="#f3f4f6"/><g fill="#9ca3af" font-family="Arial,Helvetica,sans-serif">'
  .'<text x="50%" y="46%" font-size="22" text-anchor="middle">Sin imagen</text>'
  .'<text x="50%" y="53%" font-size="14" text-anchor="middle">TAGUS</text></g></svg>'
 );
-
 $proto     = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS']!=='off') ? 'https://' : 'http://';
 $tiendaUrl = $proto . ($_SERVER['HTTP_HOST'] ?? 'localhost') . rtrim($BASE, '/') . '/public/tienda.php';
 $shareTxt  = 'Mirá el catálogo de TAGUS';
@@ -121,13 +112,34 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
   @media(min-width:900px){.catalog-grid{grid-template-columns:repeat(4,1fr)}}
   @media(min-width:1200px){.catalog-grid{grid-template-columns:repeat(5,1fr)}}
   .prod-card{border-radius:14px;box-shadow:0 1px 5px rgba(0,0,0,.06);background:#fff}
-  .prod-card .click{all:unset;display:block;cursor:pointer}
   .prod-body{padding:8px 10px 10px}
   .ratio-box{position:relative;width:100%;padding-top:120%;overflow:hidden;border-radius:14px 14px 0 0;background:#f6f7f6}
   .ratio-box>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
   .prod-title{font-weight:700;font-size:.95rem;line-height:1.1;margin-top:6px;min-height:2.2em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .prod-price{color:#6b7280;font-size:.9rem;margin-top:2px}
   .pill{display:inline-block;font-size:.72rem;padding:.15rem .45rem;border-radius:999px;background:#f3f4f6;color:#374151}
+
+  /* ===== Modal ===== */
+  .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.85);z-index:2147483647}
+  .modal.open{display:flex}
+  .modal-content{width:min(980px,95vw);max-height:92vh;background:#fff;border-radius:16px;overflow:hidden;display:grid;grid-template-rows:auto 1fr}
+  .modal-header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #eee}
+  .modal-title{font-weight:700}
+  .modal-close{cursor:pointer;font-size:20px;background:#f3f4f6;border:none;border-radius:8px;padding:4px 10px}
+  .modal-body{padding:12px;overflow:auto}
+  .m-gallery{display:grid;grid-template-columns:1.2fr .8fr;gap:12px}
+  @media(max-width:780px){.m-gallery{grid-template-columns:1fr}}
+  .g-main{border-radius:12px;overflow:hidden;background:#111;display:flex;align-items:center;justify-content:center}
+  .g-main img{max-width:100%;max-height:min(74vh,640px);object-fit:contain;cursor:zoom-in}
+  .g-thumbs{display:flex;gap:8px;flex-wrap:wrap;min-height:80px}
+  .g-thumbs img{width:74px;height:74px;object-fit:cover;border-radius:10px;cursor:pointer;border:2px solid transparent;opacity:.95}
+  .g-thumbs img.active{border-color:#0d6efd;opacity:1}
+
+  /* Lightbox fullscreen */
+  .lb{position:fixed;inset:0;background:rgba(0,0,0,.92);display:none;align-items:center;justify-content:center;z-index:2147483648}
+  .lb.open{display:flex}
+  .lb img{max-width:96vw;max-height:92vh;border-radius:12px}
+  .lb .close{position:absolute;top:14px;right:14px;font-size:26px;color:#fff;cursor:pointer}
 </style>
 
 <div class="container">
@@ -162,7 +174,7 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
           $colores = trim((string)($p['colores'] ?? ''));
         ?>
         <div class="prod-card">
-          <a class="click" href="javascript:void(0)" onclick="openModalById(<?= $pid ?>)">
+          <a href="javascript:void(0)" onclick="openModalById(<?= $pid ?>)" style="all:unset;display:block;cursor:pointer">
             <div class="ratio-box">
               <img
                 src="<?=h($thumb)?>"
@@ -251,13 +263,15 @@ function copyLink(url, el){
   modal.addEventListener('click', (e)=>{ if(e.target===modal) closeModal(); });
   document.addEventListener('keydown', (e)=>{ if(e.key==='Escape') { if (lb.classList.contains('open')) closeLb(); else closeModal(); } });
 
-  function openLb(src){ lbImg.src = src; lb.classList.add('open'); }
+  function openLb(src){ if(!src) return; lbImg.src = src; lb.classList.add('open'); }
   function closeLb(){ lb.classList.remove('open'); lbImg.src=''; }
   lb.addEventListener('click', (e)=>{ if(e.target===lb || e.target===lbClose) closeLb(); });
   lbClose.addEventListener('click', closeLb);
 
-  document.getElementById('mMain').addEventListener('click', ()=>{ if (mMain.src) openLb(mMain.src); });
+  // Al tocar la imagen grande del modal -> fullscreen
+  mMain.addEventListener('click', ()=>{ if (mMain.src) openLb(mMain.src); });
 
+  // Exponer global para las tarjetas/botones
   window.openModalById = async function(id){
     try{
       const url = new URL(window.location.href);
@@ -272,6 +286,7 @@ function copyLink(url, el){
       mPrice.textContent = '$ ' + (Number(j.precio||0).toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}));
       mDesc.textContent  = (j.descripcion||'').trim();
 
+      // variantes -> talles/colores
       mVars.innerHTML = '';
       if (Array.isArray(j.vars) && j.vars.length){
         const talles  = [...new Set(j.vars.map(v=>v.talle).filter(Boolean))].join(', ');
@@ -282,6 +297,7 @@ function copyLink(url, el){
         mVars.innerHTML = html;
       }
 
+      // Construir galería
       const FALLBACK = '<?= $NOIMG_DATA ?>';
       mThumbs.innerHTML = '';
       let imgs = [];
@@ -294,8 +310,10 @@ function copyLink(url, el){
         imgs = [{full:FALLBACK, mini:FALLBACK}];
       }
 
+      // Imagen inicial
       mMain.src = imgs[0].full || FALLBACK;
 
+      // Thumbs clicables
       imgs.forEach((o,idx)=>{
         const im = document.createElement('img');
         im.src = o.mini || o.full || FALLBACK;
@@ -309,8 +327,12 @@ function copyLink(url, el){
         mThumbs.appendChild(im);
       });
 
+      // Botón comprar
+      mActions.innerHTML = '<a class="btn btn-primary" href="ver_producto.php?id='+j.id+'">Elegir variante y comprar</a>';
+
       openModal();
     }catch(e){
+      // Fallback: ir a la página del producto
       window.location.href = 'ver_producto.php?id='+id;
     }
   };
