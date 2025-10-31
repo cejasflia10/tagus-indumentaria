@@ -1,20 +1,20 @@
 <?php
-// public/tienda.php — Catálogo + diagnóstico de foto_url
+// public/tienda.php — Catálogo público con variantes + galería + lightbox
+// ✔ Miniatura en grilla usa la URL ORIGINAL (sin transformaciones)
+// ✔ Modal usa transform (recorte) y se ve grande
+// ✔ Fallback SVG si falla cualquier imagen
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) session_start();
 
 require_once __DIR__ . '/../app/config.php';
-require_once __DIR__ . '/partials/public_header.php';
 if (!isset($conexion) || !($conexion instanceof mysqli)) { http_response_code(500); exit('❌ Sin BD'); }
 @$conexion->set_charset('utf8mb4');
 
-/* ====== ACTIVAR / DESACTIVAR DIAGNÓSTICO ====== */
-const DUMP_FOTOS = true; // <-- poné false cuando termines de probar
-
-/* ==== Helpers mínimos ==== */
+/* ==== Helpers ==== */
 if (!function_exists('h')) {
   function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
 }
+// Transform para imagen grande (modal)
 if (!function_exists('img_url')) {
   function img_url(?string $url, int $w=900, int $h=1100): string {
     $u = trim((string)($url ?? '')); if ($u==='') return '';
@@ -25,6 +25,7 @@ if (!function_exists('img_url')) {
     return $u;
   }
 }
+// Mini cuadrada (si se necesita en el modal para thumbs)
 if (!function_exists('thumb_url')) {
   function thumb_url(?string $url, int $size=200): string {
     $u = trim((string)($url ?? '')); if ($u==='') return '';
@@ -36,7 +37,7 @@ if (!function_exists('thumb_url')) {
   }
 }
 
-/* ===== Endpoint modal JSON ===== */
+/* ===== Endpoint modal JSON (ANTES de imprimir HTML) ===== */
 if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   header('Content-Type: application/json; charset=utf-8');
   $id = (int)$_GET['id'];
@@ -49,8 +50,8 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   $ri = $conexion->query("SELECT url FROM ind_imagenes WHERE producto_id={$id} ORDER BY is_primary DESC, id ASC");
   if ($ri && $ri->num_rows) {
     while($r = $ri->fetch_assoc()){
-      $full = img_url($r['url'], 900, 1100);
-      $mini = thumb_url($r['url'], 160);
+      $full = img_url($r['url'], 900, 1100);  // grande recortada
+      $mini = thumb_url($r['url'], 160);      // mini para thumbs
       $imgs[] = ['full'=>$full ?: '', 'mini'=>$mini ?: $full];
     }
   }
@@ -69,10 +70,12 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   exit;
 }
 
+/* ===== A PARTIR DE ACÁ PODEMOS IMPRIMIR HTML ===== */
+require_once __DIR__ . '/partials/public_header.php';
+
 /* ===== Búsqueda ===== */
 $q = trim($_GET['q'] ?? '');
 $like = '%'.$conexion->real_escape_string($q).'%';
-
 $sql = "
   SELECT p.id, p.titulo, p.precio,
          (SELECT url FROM ind_imagenes WHERE producto_id=p.id ORDER BY is_primary DESC, id ASC LIMIT 1) AS foto_url,
@@ -85,42 +88,6 @@ $sql = "
   ORDER BY p.id DESC
   LIMIT 100
 ";
-
-/* ====== DIAGNÓSTICO: imprimir foto_url que viene de la BD ====== */
-if (DUMP_FOTOS) {
-  header('Content-Type: text/html; charset=utf-8');
-  echo '<div style="font-family:system-ui,Arial;max-width:900px;margin:14px auto">';
-  echo '<h2>Diagnóstico de imágenes (foto_url)</h2>';
-  echo '<p style="color:#555">Mostrando lo que devuelve la consulta para cada producto. '
-     . 'Si <b>Foto URL</b> aparece vacío, entonces la BD no tiene imagen primaria para ese producto.</p>';
-
-  $res = $conexion->query($sql);
-  if ($res && $res->num_rows) {
-    echo '<table border="1" cellspacing="0" cellpadding="6" style="border-collapse:collapse;width:100%">';
-    echo '<thead><tr style="background:#f3f4f6"><th>ID</th><th>Título</th><th>Foto URL</th><th>Vista</th></tr></thead><tbody>';
-    while ($p = $res->fetch_assoc()) {
-      $id   = (int)$p['id'];
-      $tit  = (string)$p['titulo'];
-      $url  = trim((string)($p['foto_url'] ?? ''));
-      echo '<tr>';
-      echo '<td>'.h((string)$id).'</td>';
-      echo '<td>'.h($tit).'</td>';
-      echo '<td style="word-break:break-all">'.($url !== '' ? h($url) : '<em style="color:#999">(vacío)</em>').'</td>';
-      echo '<td>'.($url !== '' ? '<img src="'.h($url).'" alt="" style="height:64px;aspect-ratio:1/1;object-fit:cover;border-radius:6px">' : '—').'</td>';
-      echo '</tr>';
-    }
-    echo '</tbody></table>';
-  } else {
-    echo '<p>No se encontraron productos.</p>';
-  }
-
-  echo '<hr><p><b>¿Qué mirar?</b><br>• Si “Foto URL” está vacío → revisar que al subir la imagen se esté insertando en <code>ind_imagenes.url</code> y que alguna tenga <code>is_primary = 1</code>.<br>• Si hay URL pero no carga la <em>Vista</em> → abrir la URL en una pestaña; puede ser un enlace roto de Cloudinary.</p>';
-  echo '<p style="margin-top:18px">Cuando termines, editá este archivo y poné <code>DUMP_FOTOS</code> en <code>false</code> para volver a la tienda normal.</p>';
-  echo '</div>';
-  exit;
-}
-
-/* ====== (A partir de acá se renderiza la tienda normal; solo corre si DUMP_FOTOS = false) ====== */
 $prods = $conexion->query($sql);
 
 /* ===== URLs base + fallbacks ===== */
@@ -129,6 +96,8 @@ $BASE = preg_replace('#/public$#', '', $scriptDir);
 if ($BASE === '') $BASE = '/';
 $hrefMisPedidos = rtrim($BASE, '/').'/public/mis_pedidos.php';
 $noimgPath      = rtrim($BASE, '/').'/public/assets/noimg.png';
+
+/* Fallback SVG inline por si no existe noimg.png */
 $NOIMG_DATA = 'data:image/svg+xml;utf8,' . rawurlencode(
   '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="720" viewBox="0 0 600 720">'
  .'<rect width="100%" height="100%" fill="#f3f4f6"/><g fill="#9ca3af" font-family="Arial,Helvetica,sans-serif">'
@@ -199,27 +168,21 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
       </form>
 
       <div class="catalog-grid">
-        <?php
-        $prods = $conexion->query($sql);
-        if ($prods && $prods->num_rows):
-          while($p = $prods->fetch_assoc()):
-            $pid   = (int)$p['id'];
-            $foto  = trim((string)($p['foto_url'] ?? ''));
-            $thumb = $foto !== '' ? $foto : $noimgPath;
-            if ($thumb === '' || !file_exists($_SERVER['DOCUMENT_ROOT'] . $noimgPath)) {
-              $thumb = $NOIMG_DATA; // fallback SVG
-            }
-            $talles  = trim((string)($p['talles'] ?? ''));
-            $colores = trim((string)($p['colores'] ?? ''));
+        <?php if ($prods && $prods->num_rows): while($p = $prods->fetch_assoc()):
+          $pid   = (int)$p['id'];
+          $foto  = trim((string)($p['foto_url'] ?? ''));
+          // 🔧 En la grilla usamos la URL ORIGINAL (sin transformaciones) para que no falle
+          $thumb = $foto !== '' ? $foto : ($noimgPath ?: $NOIMG_DATA);
+          $talles  = trim((string)($p['talles'] ?? ''));
+          $colores = trim((string)($p['colores'] ?? ''));
         ?>
         <div class="prod-card">
           <button type="button" onclick="openModalById(<?= $pid ?>)" style="all:unset;cursor:pointer;display:block">
             <div class="ratio-box">
               <img
                 src="<?=h($thumb)?>"
-                title="<?=h($foto)?>"
                 alt="<?=h($p['titulo'])?>"
-                decoding="async" loading="lazy"
+                decoding="async" loading="lazy" referrerpolicy="no-referrer"
                 data-fallback="<?=h($NOIMG_DATA)?>"
                 onerror="this.onerror=null;this.src=this.dataset.fallback;">
             </div>
