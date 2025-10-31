@@ -1,7 +1,5 @@
 <?php
-// public/tienda.php — Catálogo + galería + lightbox
-// FIX: miniatura robusta (intenta cld->JPG y cae a original si no carga)
-// Debug: ?debug=1 muestra URLs usadas en cada tarjeta
+// public/tienda.php — Catálogo + galería + lightbox (miniatura visible garantizada)
 declare(strict_types=1);
 if (session_status() === PHP_SESSION_NONE) session_start();
 
@@ -9,34 +7,44 @@ require_once __DIR__ . '/../app/config.php';
 if (!isset($conexion) || !($conexion instanceof mysqli)) { http_response_code(500); exit('❌ Sin BD'); }
 @$conexion->set_charset('utf8mb4');
 
-/* ==== Helpers ==== */
+/* ===== Helpers ===== */
 if (!function_exists('h')) { function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); } }
 
-$DEBUG = isset($_GET['debug']) && $_GET['debug']=='1';
-
-/** Transform genérica (solo para URLs de Cloudinary con /upload/) */
-function cld_transform(?string $url, string $t): string {
+/**
+ * Devuelve una URL que el navegador pueda mostrar:
+ * - Si es Cloudinary y la extensión es .heic / .heif -> fuerza JPG para compatibilidad.
+ * - En cualquier otro caso devuelve la misma URL.
+ */
+function safe_thumb_url(?string $url, int $w=520, int $h=624): string {
   $u = trim((string)($url ?? ''));
   if ($u === '') return '';
-  if (strpos($u,'res.cloudinary.com') !== false && strpos($u,'/upload/') !== false) {
+  $isCloud = (strpos($u, 'res.cloudinary.com') !== false && strpos($u, '/upload/') !== false);
+
+  // Detectar HEIC / HEIF (o extensión rara)
+  $ext = strtolower(parse_url($u, PHP_URL_PATH) ?? '');
+  $isHeic = (str_ends_with($ext, '.heic') || str_ends_with($ext, '.heif'));
+
+  if ($isCloud && $isHeic) {
+    // Pedimos a Cloudinary que entregue JPG recortado a tamaño (cover)
     [$a,$b] = explode('/upload/', $u, 2);
-    return $a.'/upload/'.$t.'/'.ltrim($b,'/');
+    return $a.'/upload/f_jpg,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h.'/'.ltrim($b,'/');
+  }
+
+  // Si es Cloudinary pero no HEIC, devolvemos tal cual (sin transformaciones)
+  return $u;
+}
+
+/** Imagen grande (solo para el modal) — recortada cover */
+function modal_src(?string $url, int $w=900, int $h=1100): string {
+  $u = trim((string)($url ?? '')); if ($u==='') return '';
+  if (strpos($u,'res.cloudinary.com')!==false && strpos($u,'/upload/')!==false){
+    [$a,$b] = explode('/upload/',$u,2);
+    return $a.'/upload/f_auto,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h.'/'.ltrim($b,'/');
   }
   return $u;
 }
 
-/** Mini para grilla: fuerza JPG + cover */
-function grid_src(?string $url, int $w=520, int $h=624): string {
-  // f_jpg => compat universal; g_auto => centra mejor
-  return cld_transform($url, 'f_jpg,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h);
-}
-
-/** Grande para modal */
-function modal_src(?string $url, int $w=900, int $h=1100): string {
-  return cld_transform($url, 'f_auto,q_auto,c_fill,g_auto,w_'.$w.',h_'.$h);
-}
-
-/* ===== Endpoint modal JSON (ANTES de HTML) ===== */
+/* ===== Endpoint modal JSON (ANTES del HTML) ===== */
 if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   header('Content-Type: application/json; charset=utf-8');
   $id = (int)$_GET['id'];
@@ -50,7 +58,7 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   if ($ri && $ri->num_rows) {
     while($r = $ri->fetch_assoc()){
       $full = modal_src($r['url'], 900, 1100);
-      $mini = cld_transform($r['url'], 'f_jpg,q_auto,c_fill,g_auto,w_160,h_160');
+      $mini = safe_thumb_url($r['url'], 160, 160); // mini de los thumbs
       $imgs[] = ['full'=>$full ?: '', 'mini'=>$mini ?: $full];
     }
   }
@@ -69,7 +77,7 @@ if (isset($_GET['modal']) && (int)($_GET['id'] ?? 0) > 0) {
   exit;
 }
 
-/* ===== HTML ===== */
+/* ===== A PARTIR DE ACÁ: HTML ===== */
 require_once __DIR__ . '/partials/public_header.php';
 
 /* ===== Búsqueda ===== */
@@ -112,30 +120,26 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
   @media(min-width:640px){.catalog-grid{grid-template-columns:repeat(3,1fr)}}
   @media(min-width:900px){.catalog-grid{grid-template-columns:repeat(4,1fr)}}
   @media(min-width:1200px){.catalog-grid{grid-template-columns:repeat(5,1fr)}}
-  .prod-card{cursor:pointer;border-radius:14px;box-shadow:0 1px 5px rgba(0,0,0,.06);transition:transform .12s, box-shadow .12s;background:#fff}
-  .prod-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,.08)}
+  .prod-card{border-radius:14px;box-shadow:0 1px 5px rgba(0,0,0,.06);background:#fff}
+  .prod-card .click{all:unset;display:block;cursor:pointer}
   .prod-body{padding:8px 10px 10px}
   .ratio-box{position:relative;width:100%;padding-top:120%;overflow:hidden;border-radius:14px 14px 0 0;background:#f6f7f6}
   .ratio-box>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
   .prod-title{font-weight:700;font-size:.95rem;line-height:1.1;margin-top:6px;min-height:2.2em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
   .prod-price{color:#6b7280;font-size:.9rem;margin-top:2px}
   .pill{display:inline-block;font-size:.72rem;padding:.15rem .45rem;border-radius:999px;background:#f3f4f6;color:#374151}
-  <?php if($DEBUG): ?>
-  .dbg{font-size:.75rem;color:#6b7280;word-break:break-all;margin-top:6px}
-  .dbg a{color:#374151}
-  <?php endif; ?>
 </style>
 
 <div class="container">
   <div class="card">
-    <div class="card-header">Tienda <?= $DEBUG ? '(modo diagnóstico)' : '' ?></div>
+    <div class="card-header">Tienda</div>
     <div class="card-body">
       <div class="sharebar" style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-primary" type="button"
                 onclick="shareNative('<?=h($tiendaUrl)?>','TAGUS — Tienda','<?=h($shareTxt)?>')">🔗 Compartir</button>
         <a class="btn btn-muted" href="https://wa.me/?text=<?=urlencode($shareTxt.' '.$tiendaUrl)?>" target="_blank" rel="noopener">🟢 WhatsApp</a>
         <button class="btn btn-muted" type="button" onclick="copyLink('<?=h($tiendaUrl)?>', this)">📋 Copiar link</button>
-        <?php if(!$DEBUG): ?><a class="btn btn-muted" href="?debug=1">Diagnóstico</a><?php else: ?><a class="btn btn-muted" href="?">Salir diagnóstico</a><?php endif; ?>
+        <a class="btn btn-muted" href="<?=h($hrefMisPedidos)?>">📦 Mis pedidos</a>
       </div>
 
       <form method="get" class="row cols-2 mt-3">
@@ -146,48 +150,35 @@ $shareTxt  = 'Mirá el catálogo de TAGUS';
         <div style="align-self:end;display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary" type="submit">Buscar</button>
           <a class="btn btn-muted" href="?">Limpiar</a>
-          <a class="btn btn-muted" href="<?=h($hrefMisPedidos)?>">📦 Mis pedidos</a>
         </div>
       </form>
 
       <div class="catalog-grid">
         <?php if ($prods && $prods->num_rows): while($p = $prods->fetch_assoc()):
-          $pid    = (int)$p['id'];
-          $orig   = trim((string)($p['foto_url'] ?? ''));
-          $thumbC = $orig !== '' ? grid_src($orig, 520, 624) : '';
-          $thumb  = $thumbC !== '' ? $thumbC : ($orig !== '' ? $orig : ($noimgPath ?: $NOIMG_DATA));
+          $pid   = (int)$p['id'];
+          $orig  = trim((string)($p['foto_url'] ?? ''));
+          $thumb = $orig !== '' ? safe_thumb_url($orig, 520, 624) : ($noimgPath ?: $NOIMG_DATA);
           $talles  = trim((string)($p['talles'] ?? ''));
           $colores = trim((string)($p['colores'] ?? ''));
         ?>
         <div class="prod-card">
-          <button type="button" onclick="openModalById(<?= $pid ?>)" style="all:unset;cursor:pointer;display:block">
+          <a class="click" href="javascript:void(0)" onclick="openModalById(<?= $pid ?>)">
             <div class="ratio-box">
               <img
                 src="<?=h($thumb)?>"
-                data-src-cld="<?=h($thumbC)?>"
-                data-src-orig="<?=h($orig)?>"
                 alt="<?=h($p['titulo'])?>"
-                decoding="async"
-                onerror="fallbackMini(this)">
+                onerror="this.onerror=null;this.src='<?=h($orig !== '' ? $orig : ($noimgPath ?: $NOIMG_DATA))?>';">
             </div>
-          </button>
+          </a>
           <div class="prod-body">
             <div class="prod-title"><?=h($p['titulo'])?></div>
             <div class="prod-price">$ <?= number_format((float)$p['precio'], 2, ',', '.') ?></div>
             <?php if($talles): ?><div class="pill">Talles: <?=h($talles)?></div><?php endif; ?>
             <?php if($colores): ?><div class="pill">Colores: <?=h($colores)?></div><?php endif; ?>
             <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
-              <button class="btn btn-muted" type="button" onclick="openModalById(<?= $pid ?>)">Ver fotos</button>
+              <a class="btn btn-muted" href="javascript:void(0)" onclick="openModalById(<?= $pid ?>)">Ver fotos</a>
               <a class="btn btn-primary" href="ver_producto.php?id=<?=$pid?>">Comprar</a>
             </div>
-
-            <?php if($DEBUG): ?>
-              <div class="dbg">
-                <div><b>CLD:</b> <a target="_blank" href="<?=h($thumbC)?>"><?=h($thumbC)?></a></div>
-                <div><b>ORIG:</b> <a target="_blank" href="<?=h($orig)?>"><?=h($orig)?></a></div>
-                <div><b>USADO:</b> <a target="_blank" href="<?=h($thumb)?>"><?=h($thumb)?></a></div>
-              </div>
-            <?php endif; ?>
           </div>
         </div>
         <?php endwhile; else: ?>
@@ -239,15 +230,6 @@ function copyLink(url, el){
   }
 }
 
-// Si falla la miniatura transformada, cae a la original automáticamente.
-function fallbackMini(img){
-  const orig = img.getAttribute('data-src-orig') || '';
-  if (orig && img.src !== orig) {
-    img.onerror = null;        // prevenimos loop
-    img.src = orig;            // usar original que ya funciona en el modal
-  }
-}
-
 (function(){
   const modal   = document.getElementById('prodModal');
   const mTitle  = document.getElementById('mTitle');
@@ -274,7 +256,7 @@ function fallbackMini(img){
   lb.addEventListener('click', (e)=>{ if(e.target===lb || e.target===lbClose) closeLb(); });
   lbClose.addEventListener('click', closeLb);
 
-  mMain.addEventListener('click', ()=>{ if (mMain.src) openLb(mMain.src); });
+  document.getElementById('mMain').addEventListener('click', ()=>{ if (mMain.src) openLb(mMain.src); });
 
   window.openModalById = async function(id){
     try{
