@@ -17,36 +17,22 @@ require_once dirname(__DIR__, 2) . '/public/partials/menu.php';
 if (!function_exists('h')) {
   function h($s){ return htmlspecialchars((string)$s, ENT_QUOTES|ENT_SUBSTITUTE, 'UTF-8'); }
 }
+if (!function_exists('url')) {
+  function url(string $path=''): string {
+    $scriptDir = rtrim(str_replace('\\','/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+    // base = raíz del proyecto (quita /public o /app de la URL actual)
+    $base = preg_replace('#/(public|app)(/.*)?$#','',$scriptDir);
+    $base = $base === '/' ? '' : $base;
+    return rtrim($base,'/') . '/' . ltrim($path,'/');
+  }
+}
+/* ✅ Formato $ 0.000,00 (arregla el "Call to undefined function n2()") */
+function n2($v){ return number_format((float)$v, 2, ',', '.'); }
 
-/* ---- Helpers de rutas: relativas y absolutas, sin /app/app ---- */
-if (!function_exists('base_path')) {
-  function base_path(): string {
-    $scriptDir = str_replace('\\','/', dirname($_SERVER['SCRIPT_NAME'] ?? '/'));
-    $scriptDir = rtrim($scriptDir, '/');
-    // si estamos en /app/pages ó /public/xxx => volver a la raíz del proyecto
-    $root = preg_replace('#/(?:app|public)(?:/.*)?$#', '', $scriptDir);
-    return $root === '' ? '/' : $root . '/';
-  }
-}
-if (!function_exists('rel_url')) {
-  function rel_url(string $path=''): string {
-    return rtrim(base_path(), '/') . '/' . ltrim($path, '/');
-  }
-}
-if (!function_exists('abs_url')) {
-  function abs_url(string $path=''): string {
-    $proto = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS']!=='off') ? 'https://' : 'http://';
-    $host  = $_SERVER['HTTP_HOST'] ?? 'localhost';
-    return $proto . $host . rel_url($path);
-  }
-}
+/* URL de imagen QR (Google Chart) */
 function qr_url(string $data, int $size=320): string {
-  // Generador robusto (api.qrserver.com)
-  // El <img> lo descarga el navegador del usuario, no el servidor.
-  $w = max(80, min(1000, $size));
-  $h = $w;
   $chl = rawurlencode($data);
-  return "https://api.qrserver.com/v1/create-qr-code/?size={$w}x{$h}&data={$chl}";
+  return "https://chart.googleapis.com/chart?cht=qr&chs={$size}x{$size}&chld=L|0&chl={$chl}";
 }
 
 /* ===== Estado BD (no cortar render) ===== */
@@ -64,7 +50,7 @@ function cloud_upload_localfile(string $filepath, string $public_id): ?string {
   $params = ['folder'=>$folder,'public_id'=>$public_id,'timestamp'=>$timestamp];
   ksort($params);
   $pairs = [];
-  foreach ($params as $k=>$v) { $pairs[] = "{$k}={$v}"; }
+  foreach ($params as $k=>$v) { if ($v !== '' && $v !== null) $pairs[] = $k.'='.$v; }
   $signature = sha1(implode('&',$pairs) . CLOUD_API_SECRET);
 
   $post = [
@@ -89,6 +75,7 @@ $alert = '';
 if ($db_ok && $_SERVER['REQUEST_METHOD'] === 'POST') {
   $action = $_POST['action'] ?? '';
 
+  /* Crear producto + fotos + variantes */
   if ($action === 'crear') {
     $titulo = trim((string)($_POST['titulo'] ?? ''));
     $desc   = trim((string)($_POST['descripcion'] ?? ''));
@@ -105,6 +92,7 @@ if ($db_ok && $_SERVER['REQUEST_METHOD'] === 'POST') {
       $ok = $st->execute(); $pid = $ok ? (int)$st->insert_id : 0; $st->close();
 
       if ($ok && $pid > 0) {
+        /* Subir imágenes a Cloudinary */
         $urls = [];
         if (!empty($_FILES['imgs']) && is_array($_FILES['imgs']['name'])) {
           foreach (array_keys($_FILES['imgs']['name']) as $i) {
@@ -112,8 +100,8 @@ if ($db_ok && $_SERVER['REQUEST_METHOD'] === 'POST') {
               $tmp = $_FILES['imgs']['tmp_name'][$i];
               $name= pathinfo((string)$_FILES['imgs']['name'][$i], PATHINFO_FILENAME);
               $public_id = 'prod_'.$pid.'_'.($i+1).'_'.preg_replace('/[^A-Za-z0-9_\-]+/','_',$name);
-              $url = cloud_upload_localfile($tmp, $public_id);
-              if ($url) $urls[] = $url;
+              $urlImg = cloud_upload_localfile($tmp, $public_id);
+              if ($urlImg) $urls[] = $urlImg;
             }
           }
         }
@@ -127,6 +115,7 @@ if ($db_ok && $_SERVER['REQUEST_METHOD'] === 'POST') {
           $conexion->query("UPDATE ind_imagenes SET is_primary=1 WHERE producto_id={$pid} ORDER BY id ASC LIMIT 1");
         }
 
+        /* Variantes */
         $talles = $_POST['talle'] ?? [];
         $colores= $_POST['color'] ?? [];
         $meds   = $_POST['medidas'] ?? [];
@@ -150,6 +139,7 @@ if ($db_ok && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
   }
 
+  /* Actualizar datos básicos del producto (toggle activo) */
   if ($action === 'upd_product') {
     $pid     = (int)($_POST['producto_id'] ?? 0);
     $titulo  = trim((string)($_POST['titulo'] ?? ''));
@@ -165,6 +155,7 @@ if ($db_ok && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
   }
 
+  /* Agregar variante */
   if ($action === 'add_variant') {
     $pid   = (int)($_POST['producto_id'] ?? 0);
     $talle = trim((string)($_POST['talle'] ?? ''));
@@ -179,6 +170,7 @@ if ($db_ok && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
   }
 
+  /* Editar variante */
   if ($action === 'upd_variant') {
     $vid   = (int)($_POST['variante_id'] ?? 0);
     $pid   = (int)($_POST['producto_id'] ?? 0);
@@ -194,6 +186,7 @@ if ($db_ok && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
   }
 
+  /* Eliminar variante */
   if ($action === 'del_variant') {
     $vid = (int)($_POST['variante_id'] ?? 0);
     $pid = (int)($_POST['producto_id'] ?? 0);
@@ -205,6 +198,7 @@ if ($db_ok && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
   }
 
+  /* Ajustar stock +/- 1 */
   if ($action === 'stock_plus' || $action === 'stock_minus') {
     $var_id = (int)($_POST['variante_id'] ?? 0);
     $delta  = ($action === 'stock_plus') ? +1 : -1;
@@ -212,6 +206,7 @@ if ($db_ok && $_SERVER['REQUEST_METHOD'] === 'POST') {
     $alert = '✅ Stock actualizado.';
   }
 
+  /* Eliminar producto */
   if ($action === 'eliminar_producto') {
     $pid = (int)($_POST['producto_id'] ?? 0);
     if ($pid>0) {
@@ -351,7 +346,7 @@ if ($db_ok) {
             <?php endif; ?>
 
             <div class="row" style="gap:.5rem;margin-top:.6rem">
-              <a class="btn" href="<?= h(rel_url('public/imagenes_producto.php').'?pid='.$pid) ?>" target="_blank">🖼️ Gestionar imágenes</a>
+              <a class="btn" href="<?= h(url('public/imagenes_producto.php').'?pid='.$pid) ?>" target="_blank">🖼️ Gestionar imágenes</a>
               <form method="post" onsubmit="return confirm('¿Alternar activo/inactivo?');">
                 <input type="hidden" name="action" value="upd_product">
                 <input type="hidden" name="producto_id" value="<?= $pid ?>">
@@ -359,7 +354,7 @@ if ($db_ok) {
                 <input type="hidden" name="precio" value="<?= h((string)$p['precio']) ?>">
                 <input type="hidden" name="categoria" value="<?= h($p['categoria']) ?>">
                 <input type="hidden" name="descripcion" value="<?= h($p['descripcion'] ?? '') ?>">
-                <input type="hidden" name="activo" value="<?= ((int)$p['activo']===1)?'1':'' ?>">
+                <input type="hidden" name="activo" value="<?= ((int)$p['activo']===1)?'0':'1' ?>">
                 <button class="btn"><?= ((int)$p['activo']===1 ? '⛔ Desactivar' : '✅ Activar') ?></button>
               </form>
             </div>
@@ -372,17 +367,16 @@ if ($db_ok) {
                   $vid = (int)$v['id'];
                   $lb = trim(($v['talle'] ?? '') . ((($v['talle'] ?? '') && ($v['color'] ?? '')) ? ' / ' : '') . ($v['color'] ?? ''));
                   if ($lb==='') $lb='Única';
-                  // ✅ Absolutas para QR y acciones
-                  $sellUrl = abs_url('app/pages/venta_qr.php').'?pid='.$pid.'&vid='.$vid.'&sell=1';
-                  $tagUrl  = abs_url('app/pages/etiqueta_var.php').'?pid='.$pid.'&vid='.$vid;
+                  /* URL absoluta hacia las páginas internas */
+                  $sellUrl = url('app/pages/venta_qr.php').'?pid='.$pid.'&vid='.$vid.'&sell=1';
                 ?>
                   <div style="border:1px solid #ddd;border-radius:10px;padding:.5rem">
                     <div style="font-weight:600"><?= h($lb) ?></div>
                     <?php if (!empty($v['medidas'])): ?><div class="muted">Medidas: <?= h($v['medidas']) ?></div><?php endif; ?>
-                    <img src="<?= qr_url($sellUrl, 120) ?>" alt="QR" width="120" height="120" style="border-radius:8px;border:1px solid #ddd;margin:.35rem 0">
+                    <img src="<?= qr_url($sellUrl, 150) ?>" alt="QR" width="150" height="150" style="border-radius:8px;border:1px solid #ddd;margin:.35rem 0">
                     <div class="row">
-                      <a class="btn" href="<?= h($tagUrl) ?>" target="_blank">Etiqueta</a>
-                      <a class="btn" href="<?= h($sellUrl) ?>" target="_blank">Vender 1</a>
+                      <a class="btn" href="<?= url('app/pages/etiqueta_var.php').'?pid='.$pid.'&vid='.$vid ?>" target="_blank">Etiqueta</a>
+                      <a class="btn" href="<?= $sellUrl ?>" target="_blank">Vender 1</a>
                     </div>
                   </div>
                 <?php endforeach; ?>
